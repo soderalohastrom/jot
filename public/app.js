@@ -67,6 +67,13 @@
             <div class="search-hint" id="searchHint"></div>
           </div>
           <div class="note-list" id="noteList"></div>
+          <section class="api-keys-section">
+            <div class="api-keys-header">
+              <h2 class="api-keys-title">API Keys</h2>
+              <button type="button" class="text-button" id="createKeyButton">+ new key</button>
+            </div>
+            <div id="apiKeysList"></div>
+          </section>
         </main>
       </div>
     `;
@@ -76,6 +83,8 @@
     const searchHint = document.getElementById("searchHint");
     const newNoteButton = document.getElementById("newNoteButton");
     const logoutButton = document.getElementById("logoutButton");
+    const createKeyButton = document.getElementById("createKeyButton");
+    const apiKeysList = document.getElementById("apiKeysList");
 
     newNoteButton.addEventListener("click", async () => {
       const payload = await api("/api/notes", { method: "POST" });
@@ -99,7 +108,47 @@
       window.location.href = `/notes/${row.dataset.noteId}`;
     });
 
+    createKeyButton.addEventListener("click", async () => {
+      const label = prompt("Label for this API key:");
+      if (!label) {
+        return;
+      }
+      const result = await api("/api/keys", { method: "POST", body: { label } });
+      await navigator.clipboard.writeText(result.key);
+      alert(`API key copied to clipboard.\n\nKey: ${result.key}\n\nThis is shown only once.`);
+      loadApiKeys();
+    });
+
+    apiKeysList.addEventListener("click", async (event) => {
+      const deleteBtn = event.target.closest("[data-delete-key]");
+      if (!deleteBtn) {
+        return;
+      }
+      const keyId = deleteBtn.dataset.deleteKey;
+      if (!confirm("Delete this API key?")) {
+        return;
+      }
+      await api(`/api/keys/${keyId}`, { method: "DELETE" });
+      loadApiKeys();
+    });
+
     loadNotes("");
+    loadApiKeys();
+
+    async function loadApiKeys() {
+      const response = await api("/api/keys");
+      apiKeysList.innerHTML = response.keys.length
+        ? response.keys.map((key) => `
+            <div class="api-key-row">
+              <div class="api-key-info">
+                <span class="api-key-label">${escapeHtml(key.label)}</span>
+                <span class="api-key-meta">${escapeHtml(formatDate(key.createdAt))}</span>
+              </div>
+              <button type="button" class="text-button danger" data-delete-key="${escapeHtml(key.id)}">delete</button>
+            </div>
+          `).join("")
+        : '<div class="api-keys-empty">No API keys. Create one for CLI access.</div>';
+    }
 
     async function loadNotes(query) {
       const response = await api(`/api/notes?q=${encodeURIComponent(query)}`);

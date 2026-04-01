@@ -2,6 +2,9 @@
   "name": "jot",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "jot": "cli/jot.mjs"
+  },
   "description": "Minimal self-hosted markdown editor with inline comment threads",
   "scripts": {
     "dev": "tsx watch src/server.ts",

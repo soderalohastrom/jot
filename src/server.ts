@@ -64,10 +64,19 @@ type DeviceToken = {
   lastUsedAt: string;
 };
 
+type ApiKey = {
+  id: string;
+  label: string;
+  keySalt: string;
+  keyHash: string;
+  createdAt: string;
+};
+
 type AuthData = {
   passwordSalt: string;
   passwordHash: string;
   tokens: DeviceToken[];
+  apiKeys?: ApiKey[];
 };
 
 type ViewerInfo = {
@@ -225,6 +234,94 @@ app.post("/api/auth/logout", (req, res) => {
   }
 
   clearOwnerSessionCookie(req, res);
+  res.json({ ok: true });
+});
+
+app.get("/api/keys", requireOwnerApi, (_req, res) => {
+  res.json({ ok: true, keys: listApiKeys() });
+});
+
+app.post("/api/keys", requireOwnerApi, (req, res) => {
+  const label = String(req.body.label || "unnamed");
+  const result = createApiKey(label);
+  res.json({ ok: true, ...result });
+});
+
+app.delete("/api/keys/:id", requireOwnerApi, (req, res) => {
+  const deleted = deleteApiKey(String(req.params.id));
+  if (!deleted) {
+    res.status(404).json({ ok: false, error: "API key not found." });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/notes/:id/edit", requireOwnerApi, (req, res) => {
+  const note = notes.get(String(req.params.id));
+  if (!note) {
+    res.status(404).json({ ok: false, error: "Note not found." });
+    return;
+  }
+
+  const edits = req.body.edits;
+  if (!Array.isArray(edits) || edits.length === 0) {
+    res.status(400).json({ ok: false, error: "edits must be a non-empty array of {oldText, newText}." });
+    return;
+  }
+
+  let markdown = note.markdown;
+  const errors: string[] = [];
+
+  for (let i = 0; i < edits.length; i++) {
+    const edit = edits[i];
+    const oldText = String(edit?.oldText || "");
+    const newText = String(edit?.newText || "");
+
+    if (!oldText) {
+      errors.push(`Edit ${i}: oldText is empty.`);
+      continue;
+    }
+
+    const firstIndex = markdown.indexOf(oldText);
+    if (firstIndex === -1) {
+      errors.push(`Edit ${i}: oldText not found.`);
+      continue;
+    }
+
+    const secondIndex = markdown.indexOf(oldText, firstIndex + 1);
+    if (secondIndex !== -1) {
+      errors.push(`Edit ${i}: oldText is ambiguous (found ${countOccurrences(markdown, oldText)} times).`);
+      continue;
+    }
+
+    markdown = markdown.slice(0, firstIndex) + newText + markdown.slice(firstIndex + oldText.length);
+  }
+
+  if (errors.length > 0) {
+    res.status(400).json({ ok: false, errors });
+    return;
+  }
+
+  note.markdown = markdown;
+  note.updatedAt = nowIso();
+  if (req.body.title) {
+    note.title = normalizeTitle(String(req.body.title));
+  }
+  persistNote(note);
+  res.json({ ok: true, savedAt: note.updatedAt });
+});
+
+app.delete("/api/notes/:id", requireOwnerApi, (req, res) => {
+  const id = String(req.params.id);
+  const note = notes.get(id);
+  if (!note) {
+    res.status(404).json({ ok: false, error: "Note not found." });
+    return;
+  }
+
+  notes.delete(id);
+  try { fs.unlinkSync(noteMarkdownPath(id)); } catch {}
+  try { fs.unlinkSync(noteMetaPath(id)); } catch {}
   res.json({ ok: true });
 });
 
@@ -759,6 +856,16 @@ function requireOwnerApi(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+function countOccurrences(haystack: string, needle: string) {
+  let count = 0;
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    count++;
+    index = haystack.indexOf(needle, index + 1);
+  }
+  return count;
+}
+
 function normalizeTitle(input: string) {
   return input.trim().slice(0, 160) || "untitled";
 }
@@ -1010,8 +1117,86 @@ function clearOwnerSessionCookie(req: Request, res: Response) {
 }
 
 function isOwnerAuthenticated(req: Request) {
+  const bearer = getBearerToken(req);
+  if (bearer && verifyApiKey(bearer)) {
+    return true;
+  }
+
   const token = getOwnerSessionToken(req);
   return Boolean(token && verifyOwnerToken(token));
+}
+
+function getBearerToken(req: Request) {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) {
+    return null;
+  }
+  return header.slice(7).trim() || null;
+}
+
+function verifyApiKey(key: string) {
+  const auth = loadAuthData();
+  if (!auth || !auth.apiKeys) {
+    return false;
+  }
+
+  for (const stored of auth.apiKeys) {
+    if (secureEqualsHex(hashSecret(key, stored.keySalt), stored.keyHash)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function createApiKey(label: string) {
+  const auth = loadAuthData();
+  if (!auth) {
+    throw new Error("Password not configured.");
+  }
+
+  if (!auth.apiKeys) {
+    auth.apiKeys = [];
+  }
+
+  const rawKey = crypto.randomBytes(32).toString("base64url");
+  const salt = crypto.randomBytes(16).toString("hex");
+  const apiKey: ApiKey = {
+    id: createId(10),
+    label: label.trim().slice(0, 80) || "unnamed",
+    keySalt: salt,
+    keyHash: hashSecret(rawKey, salt),
+    createdAt: nowIso(),
+  };
+
+  auth.apiKeys.push(apiKey);
+  saveAuthData(auth);
+  return { id: apiKey.id, label: apiKey.label, key: rawKey, createdAt: apiKey.createdAt };
+}
+
+function deleteApiKey(keyId: string) {
+  const auth = loadAuthData();
+  if (!auth || !auth.apiKeys) {
+    return false;
+  }
+
+  const before = auth.apiKeys.length;
+  auth.apiKeys = auth.apiKeys.filter((k) => k.id !== keyId);
+  if (auth.apiKeys.length !== before) {
+    saveAuthData(auth);
+    return true;
+  }
+
+  return false;
+}
+
+function listApiKeys() {
+  const auth = loadAuthData();
+  if (!auth || !auth.apiKeys) {
+    return [];
+  }
+
+  return auth.apiKeys.map((k) => ({ id: k.id, label: k.label, createdAt: k.createdAt }));
 }
 
 function getCommenterIdentity(req: Request) {

@@ -183,6 +183,15 @@ input:focus, textarea:focus { border-color: var(--muted); }
 .note-row-title { font-size: 1rem; font-weight: 600; margin-bottom: 0.35rem; }
 .note-row-snippet { color: var(--muted); line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+.api-keys-section { margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line-soft); }
+.api-keys-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+.api-keys-title { margin: 0; font-size: 1rem; font-weight: 600; color: var(--muted); }
+.api-key-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--line-soft); }
+.api-key-info { display: flex; align-items: center; gap: 0.75rem; }
+.api-key-label { font-weight: 600; }
+.api-key-meta { color: var(--muted-2); font-size: 0.85rem; }
+.api-keys-empty { color: var(--muted-2); font-size: 0.9rem; }
+
 .workspace {
   display: grid; grid-template-columns: 1fr 1fr;
   min-height: calc(100vh - var(--toolbar-height)); overflow: hidden;

@@ -38,6 +38,30 @@ node dist/server.js --data=/var/lib/jot       # custom data directory
 docker compose up --build
 ```
 
+## API
+
+Create an API key from the landing page. Use it with the CLI or any HTTP client.
+
+### CLI
+
+```bash
+npm install -g .                             # or just use node cli/jot.mjs
+jot register myserver https://jot.example.com <api-key>
+jot myserver list
+jot myserver search "query"
+jot myserver read <id>
+jot myserver create "My note"
+jot myserver edit <id> '[{"oldText":"foo","newText":"bar"}]'
+jot myserver update <id> title "New title"
+jot myserver delete <id>
+```
+
+### HTTP
+
+```bash
+curl -H "Authorization: Bearer <api-key>" https://jot.example.com/api/notes
+```
+
 ## Data
 
 ```
