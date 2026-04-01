@@ -5,6 +5,20 @@ import path from "node:path";
 
 import express, { type NextFunction, type Request, type Response } from "express";
 import { WebSocketServer, type WebSocket } from "ws";
+
+import {
+  type CollabState,
+  type SavedCollabState,
+  type Op,
+  collabFromMarkdown,
+  collabToMarkdown,
+  applyOpToServer,
+  saveCollabState,
+  loadCollabState,
+  newCollabState,
+  idBeforeIndex,
+  idAtIndex,
+} from "./collab.js";
 import hljs from "highlight.js";
 import { marked, type Tokens } from "marked";
 import sanitizeHtml from "sanitize-html";
@@ -48,6 +62,11 @@ type NoteMetaFile = {
 
 type NoteRecord = NoteMetaFile & {
   markdown: string;
+  collab: CollabState;
+};
+
+type NoteMetaFileWithCollab = NoteMetaFile & {
+  collabState?: SavedCollabState;
 };
 
 type NoteSummary = {
@@ -382,7 +401,11 @@ app.put("/api/notes/:id", requireOwnerApi, (req, res) => {
   }
 
   note.title = normalizeTitle(String(req.body.title || note.title));
-  note.markdown = String(req.body.markdown || "");
+  const newMarkdown = String(req.body.markdown || "");
+  if (newMarkdown !== note.markdown) {
+    note.collab = collabFromMarkdown(newMarkdown);
+    note.markdown = newMarkdown;
+  }
   note.updatedAt = nowIso();
   persistNote(note);
   res.json({ ok: true, savedAt: note.updatedAt });
@@ -699,25 +722,35 @@ function loadNotesIntoMemory() {
     }
 
     const markdown = fs.readFileSync(markdownPath, "utf8");
-    const meta = readJson<NoteMetaFile | null>(metaPath, null);
+    const meta = readJson<NoteMetaFileWithCollab | null>(metaPath, null);
     if (!meta) {
       continue;
+    }
+
+    const threads = Array.isArray(meta.threads)
+      ? meta.threads.map((thread) => ({
+          ...thread,
+          messages: Array.isArray(thread.messages)
+            ? thread.messages.map((message) => ({
+                ...message,
+                parentId: typeof message.parentId === "string" ? message.parentId : null,
+              }))
+            : [],
+        }))
+      : [];
+
+    let collab: CollabState;
+    if (meta.collabState) {
+      collab = loadCollabState(meta.collabState);
+    } else {
+      collab = collabFromMarkdown(markdown);
     }
 
     notes.set(id, {
       ...meta,
       markdown,
-      threads: Array.isArray(meta.threads)
-        ? meta.threads.map((thread) => ({
-            ...thread,
-            messages: Array.isArray(thread.messages)
-              ? thread.messages.map((message) => ({
-                  ...message,
-                  parentId: typeof message.parentId === "string" ? message.parentId : null,
-                }))
-              : [],
-          }))
-        : [],
+      threads,
+      collab,
     });
   }
 }
@@ -753,6 +786,7 @@ function createNote() {
     updatedAt: timestamp,
     markdown: "",
     threads: [],
+    collab: newCollabState(),
   };
 
   notes.set(id, note);
@@ -761,13 +795,16 @@ function createNote() {
 }
 
 function persistNote(note: NoteRecord) {
-  const meta: NoteMetaFile = {
+  note.markdown = collabToMarkdown(note.collab);
+
+  const meta: NoteMetaFileWithCollab = {
     id: note.id,
     title: note.title,
     shareId: note.shareId,
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
     threads: note.threads,
+    collabState: saveCollabState(note.collab),
   };
 
   fs.writeFileSync(noteMarkdownPath(note.id), note.markdown, "utf8");
