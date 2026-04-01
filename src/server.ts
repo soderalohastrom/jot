@@ -1077,6 +1077,7 @@ function renderSimplePage(title: string, body: string) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/theme.js"></script>
   </head>
   <body class="page-shell simple-page">
     <main class="simple-page-content">${body}</main>
@@ -1099,8 +1100,10 @@ function renderAuthPage(mode: "login" | "setup") {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${title}</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/theme.js"></script>
   </head>
   <body class="page-shell auth-shell" data-auth-mode="${mode}">
+    <button type="button" class="text-button theme-toggle auth-theme-toggle" aria-label="Toggle theme"></button>
     <main class="auth-layout">
       <h1>${heading}</h1>
       <p class="auth-hint">${hint}</p>
@@ -1118,6 +1121,7 @@ function renderAuthPage(mode: "login" | "setup") {
       </form>
     </main>
     <script>window.__OWNER_TOKEN_KEY__ = ${JSON.stringify(ownerLocalStorageTokenKey)};</script>
+    <script>document.querySelectorAll('.theme-toggle').forEach(function(b){b.innerHTML=window.__themeIcon(document.documentElement.getAttribute('data-theme')||'dark')});</script>
     <script src="/static/login.js" defer></script>
   </body>
 </html>`;
@@ -1143,10 +1147,12 @@ function renderAppShell(
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(title)}</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/theme.js"></script>
   </head>
   <body class="page-shell app-page" ${attrs}>
     <div id="app"></div>
     <script>window.__OWNER_TOKEN_KEY__ = ${JSON.stringify(ownerLocalStorageTokenKey)};</script>
+    <script>document.querySelectorAll('.theme-toggle').forEach(function(b){b.innerHTML=window.__themeIcon(document.documentElement.getAttribute('data-theme')||'dark')});</script>
     <script src="/static/app.js" defer></script>
   </body>
 </html>`;

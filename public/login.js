@@ -1,7 +1,4 @@
 (() => {
-  const savedTheme = localStorage.getItem("md_theme") || "dark";
-  document.documentElement.setAttribute("data-theme", savedTheme);
-
   const mode = document.body.dataset.authMode;
   const ownerTokenKey = window.__OWNER_TOKEN_KEY__ || "md_owner_token";
   const form = document.getElementById("auth-form");

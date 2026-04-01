@@ -12,35 +12,7 @@
   const isMobileDevice = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
     (navigator.userAgent.includes("Mac") && "ontouchstart" in window && navigator.maxTouchPoints > 1);
 
-  initTheme();
-
-  function initTheme() {
-    const saved = localStorage.getItem("md_theme") || "dark";
-    document.documentElement.setAttribute("data-theme", saved);
-  }
-
-  function themeIcon(theme) {
-    return theme === "dark"
-      ? '<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.4"/><g stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><line x1="8" y1="1" x2="8" y2="2.5"/><line x1="8" y1="13.5" x2="8" y2="15"/><line x1="1" y1="8" x2="2.5" y2="8"/><line x1="13.5" y1="8" x2="15" y2="8"/><line x1="3.05" y1="3.05" x2="4.1" y2="4.1"/><line x1="11.9" y1="11.9" x2="12.95" y2="12.95"/><line x1="3.05" y1="12.95" x2="4.1" y2="11.9"/><line x1="11.9" y1="4.1" x2="12.95" y2="3.05"/></g></svg>'
-      : '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M14 9.2A5.8 5.8 0 0 1 6.8 2 6.5 6.5 0 1 0 14 9.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
-  }
-
-  function toggleTheme() {
-    const current = document.documentElement.getAttribute("data-theme") || "dark";
-    const next = current === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", next);
-    localStorage.setItem("md_theme", next);
-    const buttons = document.querySelectorAll(".theme-toggle");
-    for (const button of buttons) {
-      button.innerHTML = themeIcon(next);
-    }
-  }
-
-  document.addEventListener("click", (event) => {
-    if (event.target.closest(".theme-toggle")) {
-      toggleTheme();
-    }
-  });
+  const themeIcon = window.__themeIcon || ((t) => t === "dark" ? "☀" : "☾");
 
   const state = {
     page,

@@ -134,7 +134,8 @@ input:focus, textarea:focus { border-color: var(--muted); }
 .simple-page { display: grid; place-items: center; }
 .simple-page-content { width: min(560px, calc(100vw - 2rem)); }
 
-.auth-shell { display: grid; place-items: center; padding: 2rem; }
+.auth-shell { display: grid; place-items: center; padding: 2rem; position: relative; }
+.auth-theme-toggle { position: absolute; top: 1rem; right: 1rem; }
 .auth-layout { width: min(420px, 100%); }
 .auth-layout h1 { margin: 0 0 0.8rem; font-size: 2rem; font-weight: 700; }
 .auth-hint { margin: 0 0 1.5rem; color: var(--muted); line-height: 1.5; }
