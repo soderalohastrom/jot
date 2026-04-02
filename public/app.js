@@ -922,6 +922,9 @@
         `npx jot my-jot resolve ${currentNoteId} <thread-id>`,
         `npx jot my-jot reopen ${currentNoteId} <thread-id>`,
         `npx jot my-jot delete-thread ${currentNoteId} <thread-id>`,
+        ``,
+        `# Full command reference`,
+        `npx jot --help`,
       );
     } else {
       const shareUrl = `${baseUrl}/s/${state.note?.shareId || shareId}`;
@@ -940,6 +943,9 @@
         ``,
         `# Reply to a specific message`,
         `npx jot my-jot reply <thread-id> <message-id> "reply" --name="My Agent"`,
+        ``,
+        `# Full command reference`,
+        `npx jot --help`,
       );
     }
     const instructions = lines.join("\n");
