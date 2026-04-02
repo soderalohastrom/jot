@@ -21,7 +21,7 @@ Open `http://localhost:3210`. Set the owner password on first visit.
 - Agent setup modal with copy-paste instructions
 - Dark and light theme
 - Mobile support
-- Plain `.md` files on disk
+- `.md` files on disk (derived from collaborative state)
 
 ## Server
 
@@ -45,15 +45,17 @@ Click the share icon in the editor to configure access:
 - **Not shared** (default)
 - **View only**: read-only preview
 - **View & comment**: preview with comment threads
-- **Edit & comment**: full collaborative editor
+- **Edit & comment**: full collaborative editor with comments
 
-Each note has a stable share URL (`/s/<id>`). Toggle access without changing the link.
+Each note has a stable share URL (`/s/<id>`). Anyone with the link gets the configured level of access, both in the browser and via the CLI. Toggle access without changing the link.
 
 ## CLI
 
-### Owner mode (API key)
+The CLI works in two modes depending on how you register.
 
-Create an API key from the settings gear on the landing page.
+### Owner mode
+
+The instance owner creates API keys from the settings gear on the landing page. An API key grants full access to all notes.
 
 ```bash
 npx @mariozechner/jot register myserver https://jot.example.com <api-key>
@@ -72,9 +74,9 @@ npx @mariozechner/jot myserver update <note-id> title "New title"
 npx @mariozechner/jot myserver delete <note-id>
 ```
 
-### Shared mode (share link)
+### Shared mode
 
-No API key needed. The share URL is the credential.
+Anyone with a share link can use it to register. No API key needed. The link itself is the credential, and access depends on what the owner configured (view, comment, or edit). This works for both humans and their agents.
 
 ```bash
 npx @mariozechner/jot register shared https://jot.example.com/s/abc123
@@ -86,7 +88,7 @@ npx @mariozechner/jot shared reply <thread-id> <message-id> "reply" --name="My A
 
 ### Agent integration
 
-Click the robot icon in the editor or shared view to get copy-paste CLI instructions for your agent. The instructions include the current instance URL, note ID, and full command reference.
+Click the robot icon in the editor or on a shared note to get copy-paste CLI instructions. The instructions are pre-filled with the instance URL and note ID. Hand them to your agent and it can read, edit, and comment on the note.
 
 ## Data
 
@@ -98,7 +100,7 @@ data/
     <id>.json
 ```
 
-Notes are plain markdown files. Metadata, comment threads, and collaborative state live in the sidecar JSON.
+The `.md` files are derived from the collaborative editing state stored in the `.json` sidecar. The JSON is the source of truth. The markdown files are written for convenience (grep, backup, external tooling).
 
 ## HTTP API
 
