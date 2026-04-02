@@ -1,5 +1,5 @@
 {
-  "name": "jot",
+  "name": "@mariozechner/jot",
   "version": "0.1.0",
   "bin": {
     "jot": "cli/jot.mjs"

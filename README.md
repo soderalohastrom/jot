@@ -1,66 +1,92 @@
 # jot
 
-Minimal self-hosted markdown editor with inline comment threads.
+Minimal self-hosted collaborative markdown editor with inline comment threads. Built for humans and agents.
 
-- Single owner, password set on first startup
-- Per-device auth tokens
-- Plain `.md` files on disk
-- Split editor/preview
-- Syntax highlighting in preview
-- Share notes via public URL
-- Inline comment threads anchored to text selections
-- Threaded replies, resolve/reopen
-- Anonymous commenters with cookie-based identity
-- Dark and light theme
-- Mobile support
-
-## Setup
+## Quick Start
 
 ```bash
-npm install
-npm run dev
+npx @mariozechner/jot serve
 ```
 
 Open `http://localhost:3210`. Set the owner password on first visit.
 
-## Production
+## Features
+
+- Collaborative real-time editing (multiple tabs, multiple users)
+- Remote cursors with names
+- Inline comment threads anchored to text selections
+- Threaded replies, resolve/reopen
+- Share notes with configurable access (view, comment, edit)
+- CLI for humans and agents (owner API keys or share links)
+- Agent setup modal with copy-paste instructions
+- Dark and light theme
+- Mobile support
+- Plain `.md` files on disk
+
+## Server
 
 ```bash
-npm run build
-node dist/server.js                          # port 3210, data in ./data
-node dist/server.js --port=8080              # custom port
-node dist/server.js --data=/var/lib/jot       # custom data directory
+npx @mariozechner/jot serve                    # port 3210, data in ./data
+npx @mariozechner/jot serve --port=8080        # custom port
+npx @mariozechner/jot serve --data=/var/jot    # custom data dir
 ```
 
 ## Docker
 
 ```bash
-docker compose up --build
+cd docker
+bash control.sh start
 ```
 
-## API
+## Sharing
 
-Create an API key from the landing page. Use it with the CLI or any HTTP client.
+Click the share icon in the editor to configure access:
 
-### CLI
+- **Not shared** (default)
+- **View only**: read-only preview
+- **View & comment**: preview with comment threads
+- **Edit & comment**: full collaborative editor
+
+Each note has a stable share URL (`/s/<id>`). Toggle access without changing the link.
+
+## CLI
+
+### Owner mode (API key)
+
+Create an API key from the settings gear on the landing page.
 
 ```bash
-npm install -g .                             # or just use node cli/jot.mjs
-jot register myserver https://jot.example.com <api-key>
-jot myserver list
-jot myserver search "query"
-jot myserver read <id>
-jot myserver create "My note"
-jot myserver edit <id> '[{"oldText":"foo","newText":"bar"}]'
-jot myserver update <id> title "New title"
-jot myserver delete <id>
+npx @mariozechner/jot register myserver https://jot.example.com <api-key>
+npx @mariozechner/jot myserver list
+npx @mariozechner/jot myserver read <note-id>
+npx @mariozechner/jot myserver create "My note"
+npx @mariozechner/jot myserver edit <note-id> '[{"oldText":"foo","newText":"bar"}]'
+npx @mariozechner/jot myserver comment <note-id> "quoted text" "comment body"
+npx @mariozechner/jot myserver reply <note-id> <thread-id> <message-id> "reply"
+npx @mariozechner/jot myserver resolve <note-id> <thread-id>
+npx @mariozechner/jot myserver reopen <note-id> <thread-id>
+npx @mariozechner/jot myserver edit-comment <note-id> <message-id> "new body"
+npx @mariozechner/jot myserver delete-comment <note-id> <message-id>
+npx @mariozechner/jot myserver delete-thread <note-id> <thread-id>
+npx @mariozechner/jot myserver update <note-id> title "New title"
+npx @mariozechner/jot myserver delete <note-id>
 ```
 
-### HTTP
+### Shared mode (share link)
+
+No API key needed. The share URL is the credential.
 
 ```bash
-curl -H "Authorization: Bearer <api-key>" https://jot.example.com/api/notes
+npx @mariozechner/jot register shared https://jot.example.com/s/abc123
+npx @mariozechner/jot shared read
+npx @mariozechner/jot shared edit '[{"oldText":"foo","newText":"bar"}]'
+npx @mariozechner/jot shared comment "quoted text" "comment body" --name="My Agent"
+npx @mariozechner/jot shared reply <thread-id> <message-id> "reply" --name="My Agent"
 ```
+
+### Agent integration
+
+Click the robot icon in the editor or shared view to get copy-paste CLI instructions for your agent. The instructions include the current instance URL, note ID, and full command reference.
 
 ## Data
 
@@ -72,11 +98,40 @@ data/
     <id>.json
 ```
 
-Notes are plain markdown files. Metadata and comment threads live in the sidecar JSON.
+Notes are plain markdown files. Metadata, comment threads, and collaborative state live in the sidecar JSON.
 
-## No support
+## HTTP API
 
-This is a personal tool. No issues, no PRs, no support. Fork it if you want.
+All owner endpoints require `Authorization: Bearer <api-key>`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/notes` | List notes |
+| POST | `/api/notes` | Create note |
+| GET | `/api/notes/:id` | Read note |
+| PUT | `/api/notes/:id` | Update title, markdown, shareAccess |
+| DELETE | `/api/notes/:id` | Delete note |
+| POST | `/api/notes/:id/edit` | Apply text edits |
+| POST | `/api/notes/:id/threads` | Create comment thread |
+| POST | `/api/notes/:id/threads/:tid/replies` | Reply to thread |
+| PATCH | `/api/notes/:id/threads/:tid` | Resolve/reopen thread |
+| DELETE | `/api/notes/:id/threads/:tid` | Delete thread |
+| PATCH | `/api/notes/:id/messages/:mid` | Edit comment |
+| DELETE | `/api/notes/:id/messages/:mid` | Delete comment |
+| GET | `/api/keys` | List API keys |
+| POST | `/api/keys` | Create API key |
+| DELETE | `/api/keys/:id` | Delete API key |
+
+Share endpoints (no auth, access controlled by `shareAccess`):
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/share/:sid` | Read shared note |
+| GET | `/api/share/:sid/note` | Read shared note (lightweight) |
+| POST | `/api/share/:sid/edit` | Edit (requires edit access) |
+| POST | `/api/share/:sid/threads` | Create comment |
+| POST | `/api/share/:sid/threads/:tid/replies` | Reply |
+| POST | `/api/share/:sid/render` | Render markdown to HTML |
 
 ## License
 
