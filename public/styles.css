@@ -410,6 +410,21 @@ input:focus, textarea:focus { border-color: var(--muted); }
   pointer-events: none;
 }
 .refresh-toast.is-visible { opacity: 1; }
+.refresh-toast--clickable { cursor: pointer; pointer-events: auto; }
+.refresh-toast--clickable:hover { text-decoration: underline; }
+
+/* --- List-row live animations --- */
+.note-row { transition: opacity 260ms ease, transform 260ms ease; }
+.note-row--entering { opacity: 0; transform: translateY(-6px); }
+.note-row--leaving { opacity: 0; transform: translateX(12px); pointer-events: none; }
+
+/* --- Settings toggle --- */
+.settings-toggle {
+  display: flex; align-items: center; gap: 0.55rem;
+  padding: 0.4rem 0; font-size: 0.9rem; color: var(--text); cursor: pointer;
+  user-select: none;
+}
+.settings-toggle input[type="checkbox"] { width: 1rem; height: 1rem; cursor: pointer; }
 
 /* --- Disconnected banner --- */
 .editor-disconnected {

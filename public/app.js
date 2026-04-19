@@ -199,6 +199,15 @@
           </div>
           <div class="settings-section">
             <div class="settings-section-header">
+              <h3 class="settings-section-title">Preferences</h3>
+            </div>
+            <label class="settings-toggle">
+              <input type="checkbox" id="autoOpenToggle" />
+              <span>Auto-open new notes as they appear</span>
+            </label>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-header">
               <h3 class="settings-section-title">API Keys</h3>
               <jot-button variant="ghost" size="sm" id="createKeyButton">+ new key</jot-button>
             </div>
@@ -206,6 +215,14 @@
           </div>
         </div>
       `;
+
+      const autoOpenToggle = document.getElementById("autoOpenToggle");
+      if (autoOpenToggle) {
+        autoOpenToggle.checked = localStorage.getItem("jot.autoOpenNewNotes") === "1";
+        autoOpenToggle.addEventListener("change", () => {
+          localStorage.setItem("jot.autoOpenNewNotes", autoOpenToggle.checked ? "1" : "0");
+        });
+      }
 
       const apiKeysList = document.getElementById("apiKeysList");
       const createKeyButton = document.getElementById("createKeyButton");
@@ -273,6 +290,19 @@
       renderKeys();
     }
 
+    function renderNoteRowHtml(note) {
+      return `
+        <div class="note-row" data-note-id="${escapeHtml(note.id)}">
+          <div class="note-row-content">
+            <div class="note-row-title">${escapeHtml(note.title || "untitled")}</div>
+            <div class="note-row-snippet">${escapeHtml(note.snippet || "Empty note")}</div>
+            <div class="note-row-meta">${escapeHtml(formatDate(note.updatedAt))}</div>
+          </div>
+          <jot-icon-button icon="trash" label="Delete note" class="note-delete-btn" data-note-id="${escapeHtml(note.id)}" danger></jot-icon-button>
+        </div>
+      `;
+    }
+
     async function loadNotes(query) {
       const response = await api(`/api/notes?q=${encodeURIComponent(query)}`);
       const hasNotes = response.notes.length > 0;
@@ -290,22 +320,48 @@
       }
 
       noteList.innerHTML = hasNotes
-        ? response.notes
-            .map(
-              (note) => `
-                <div class="note-row" data-note-id="${escapeHtml(note.id)}">
-                  <div class="note-row-content">
-                    <div class="note-row-title">${escapeHtml(note.title || "untitled")}</div>
-                    <div class="note-row-snippet">${escapeHtml(note.snippet || "Empty note")}</div>
-                    <div class="note-row-meta">${escapeHtml(formatDate(note.updatedAt))}</div>
-                  </div>
-                  <jot-icon-button icon="trash" label="Delete note" class="note-delete-btn" data-note-id="${escapeHtml(note.id)}" danger></jot-icon-button>
-                </div>
-              `,
-            )
-            .join("")
+        ? response.notes.map(renderNoteRowHtml).join("")
         : `<div class="empty-state">No notes match your search.</div>`;
     }
+
+    connectGlobalWebSocket((msg) => {
+      if (msg.type === "note-created" && msg.note) {
+        const existing = noteList.querySelector(`[data-note-id="${CSS.escape(msg.note.id)}"]`);
+        if (existing) return;
+        const empty = noteList.querySelector(".empty-state, .empty-state-create");
+        if (empty) {
+          loadNotes(searchInput.value);
+          return;
+        }
+        const wrap = document.createElement("div");
+        wrap.innerHTML = renderNoteRowHtml(msg.note).trim();
+        const row = wrap.firstElementChild;
+        row.classList.add("note-row--entering");
+        noteList.prepend(row);
+        requestAnimationFrame(() => row.classList.remove("note-row--entering"));
+        if (localStorage.getItem("jot.autoOpenNewNotes") === "1" && !isUserTyping()) {
+          setTimeout(() => { window.location.href = `/notes/${msg.note.id}`; }, 400);
+        } else {
+          showToast(`📝 New note: ${msg.note.title || "untitled"}`, {
+            onClick: () => { window.location.href = `/notes/${msg.note.id}`; },
+          });
+        }
+      } else if (msg.type === "note-meta-updated" && msg.note) {
+        const row = noteList.querySelector(`[data-note-id="${CSS.escape(msg.note.id)}"]`);
+        if (!row) return;
+        const title = row.querySelector(".note-row-title");
+        const snippet = row.querySelector(".note-row-snippet");
+        const meta = row.querySelector(".note-row-meta");
+        if (title) title.textContent = msg.note.title || "untitled";
+        if (snippet) snippet.textContent = msg.note.snippet || "Empty note";
+        if (meta) meta.textContent = formatDate(msg.note.updatedAt);
+      } else if (msg.type === "note-deleted" && msg.id) {
+        const row = noteList.querySelector(`[data-note-id="${CSS.escape(msg.id)}"]`);
+        if (!row) return;
+        row.classList.add("note-row--leaving");
+        setTimeout(() => row.remove(), 280);
+      }
+    });
   }
 
   function initNotePage(isPublic) {
@@ -653,8 +709,31 @@
             return;
           }
           if (msg.type === "refresh") {
-            if (msg.message) showRefreshToast(msg.message);
+            if (msg.message) showToast(msg.message);
             reloadFromServer(refsArg, publicMode);
+            return;
+          }
+          if (msg.type === "note-created" && msg.note) {
+            if (state.note && msg.note.id === state.note.id) return;
+            if (localStorage.getItem("jot.autoOpenNewNotes") === "1" && !isUserTyping()) {
+              setTimeout(() => { window.location.href = `/notes/${msg.note.id}`; }, 400);
+              return;
+            }
+            showToast(`📝 New note: ${msg.note.title || "untitled"}`, {
+              onClick: () => { window.location.href = `/notes/${msg.note.id}`; },
+            });
+            return;
+          }
+          if (msg.type === "note-deleted" && msg.id) {
+            if (state.note && msg.id === state.note.id) {
+              showToast("⚠︎ This note was deleted", {
+                onClick: () => { window.location.href = `/`; },
+                duration: 8000,
+              });
+            }
+            return;
+          }
+          if (msg.type === "note-meta-updated") {
             return;
           }
           if (msg.type !== "updated") {
@@ -1083,20 +1162,53 @@
   }
 
   let refreshToastTimer = null;
-  function showRefreshToast(text) {
+  function showToast(text, opts = {}) {
     let toast = document.getElementById("refreshToast");
     if (!toast) {
       toast = document.createElement("div");
       toast.id = "refreshToast";
-      toast.className = "refresh-toast";
       document.body.appendChild(toast);
     }
+    toast.className = "refresh-toast" + (opts.onClick ? " refresh-toast--clickable" : "");
     toast.textContent = text;
+    toast.onclick = null;
+    if (opts.onClick) toast.onclick = () => { opts.onClick(); toast.classList.remove("is-visible"); };
     requestAnimationFrame(() => toast.classList.add("is-visible"));
     if (refreshToastTimer) clearTimeout(refreshToastTimer);
     refreshToastTimer = setTimeout(() => {
       toast.classList.remove("is-visible");
-    }, 3200);
+    }, opts.duration || 3600);
+  }
+  const showRefreshToast = (text) => showToast(text);
+
+  function isUserTyping() {
+    const active = document.activeElement;
+    if (!active) return false;
+    const tag = active.tagName;
+    return tag === "TEXTAREA" || tag === "INPUT" || active.isContentEditable;
+  }
+
+  function connectGlobalWebSocket(onEvent) {
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${location.host}/`;
+    let reconnectDelay = 1000;
+    let ws;
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => { reconnectDelay = 1000; };
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        onEvent(msg);
+      };
+      ws.onclose = () => {
+        setTimeout(() => {
+          reconnectDelay = Math.min(reconnectDelay * 1.5, 15000);
+          connect();
+        }, reconnectDelay);
+      };
+    }
+    connect();
   }
 
   function openAgentModal(refs) {

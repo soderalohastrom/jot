@@ -574,6 +574,7 @@ app.delete("/api/notes/:id", requireOwnerApi, (req, res) => {
   notes.delete(id);
   try { fs.unlinkSync(noteMarkdownPath(id)); } catch {}
   try { fs.unlinkSync(noteMetaPath(id)); } catch {}
+  broadcastGlobal({ type: "note-deleted", id });
   res.json({ ok: true });
 });
 
@@ -585,7 +586,9 @@ app.get("/api/notes", requireOwnerApi, (req, res) => {
 
 app.post("/api/notes", requireOwnerApi, (_req, res) => {
   const note = createNote();
-  res.json({ ok: true, note: summarizeNote(note, "") });
+  const summary = summarizeNote(note, "");
+  broadcastGlobal({ type: "note-created", note: summary });
+  res.json({ ok: true, note: summary });
 });
 
 app.get("/api/notes/:id", requireOwnerApi, (req, res) => {
@@ -658,6 +661,7 @@ app.put("/api/notes/:id", requireOwnerApi, (req, res) => {
   if (titleChanged || markdownChanged || shareAccessChanged) {
     broadcastEditorHello(note);
     broadcastNoteUpdate(note);
+    broadcastGlobal({ type: "note-meta-updated", note: summarizeNote(note, "") }, note.id);
   }
   res.json({ ok: true, savedAt: note.updatedAt, shareAccess: note.shareAccess });
 });
@@ -1095,7 +1099,7 @@ let nextColorIndex = 0;
 
 type ClientConn = {
   ws: WebSocket;
-  kind: "editor" | "public-editor" | "public-viewer";
+  kind: "editor" | "public-editor" | "public-viewer" | "global";
   noteId: string;
   shareId: string;
   clientId: string;
@@ -1186,7 +1190,17 @@ wss.on("connection", (ws, req) => {
     return;
   }
 
-  ws.close();
+  if (!isOwnerAuthenticatedIncomingRequest(req)) {
+    ws.close();
+    return;
+  }
+
+  const clientId = `c${++clientIdCounter}`;
+  const conn: ClientConn = { ws, kind: "global", noteId: "", shareId: "", clientId, name: "Owner", color: "", alive: true };
+  clients.push(conn);
+  ws.on("pong", () => { conn.alive = true; });
+  ws.on("close", () => handleDisconnect(conn));
+  ws.on("error", () => handleDisconnect(conn));
 });
 
 function isCollaborativeConn(conn: ClientConn, noteId: string) {
@@ -1289,7 +1303,18 @@ function handleEditorMessage(conn: ClientConn, data: string) {
   broadcastNoteUpdate(note);
 }
 
-type AnyServerMessage = (ServerHelloMessage & { clientId?: string }) | ServerMutationMessage | ServerPresenceMessage | ServerPresenceLeaveMessage | { type: "updated"; noteId: string; shareId: string; updatedAt: string } | { type: "threads-updated"; noteId: string; shareId: string } | { type: "refresh"; noteId: string; shareId: string; message?: string; reason?: string };
+type NoteMetaBroadcast = { id: string; title: string; shareId: string; updatedAt: string; snippet: string };
+type AnyServerMessage =
+  | (ServerHelloMessage & { clientId?: string })
+  | ServerMutationMessage
+  | ServerPresenceMessage
+  | ServerPresenceLeaveMessage
+  | { type: "updated"; noteId: string; shareId: string; updatedAt: string }
+  | { type: "threads-updated"; noteId: string; shareId: string }
+  | { type: "refresh"; noteId: string; shareId: string; message?: string; reason?: string }
+  | { type: "note-created"; note: NoteMetaBroadcast }
+  | { type: "note-meta-updated"; note: NoteMetaBroadcast }
+  | { type: "note-deleted"; id: string };
 
 function sendServerMessage(ws: WebSocket, message: AnyServerMessage) {
   if (ws.readyState === 1) {
@@ -1365,6 +1390,18 @@ function broadcastNoteUpdate(note: NoteRecord) {
   };
   for (const conn of clients) {
     if (conn.kind === "public-viewer" && conn.shareId === note.shareId) {
+      sendServerMessage(conn.ws, message);
+    }
+  }
+}
+
+function broadcastGlobal(message: AnyServerMessage, excludeNoteId?: string) {
+  for (const conn of clients) {
+    if (conn.kind === "global") {
+      sendServerMessage(conn.ws, message);
+      continue;
+    }
+    if ((conn.kind === "editor" || conn.kind === "public-editor" || conn.kind === "public-viewer") && conn.noteId !== excludeNoteId) {
       sendServerMessage(conn.ws, message);
     }
   }
