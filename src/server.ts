@@ -1396,12 +1396,14 @@ function broadcastNoteUpdate(note: NoteRecord) {
 }
 
 function broadcastGlobal(message: AnyServerMessage, excludeNoteId?: string) {
+  // Owner-only channel: share viewers/editors must never see titles or ids
+  // of notes they aren't explicitly viewing, even indirectly via broadcasts.
   for (const conn of clients) {
     if (conn.kind === "global") {
       sendServerMessage(conn.ws, message);
       continue;
     }
-    if ((conn.kind === "editor" || conn.kind === "public-editor" || conn.kind === "public-viewer") && conn.noteId !== excludeNoteId) {
+    if (conn.kind === "editor" && conn.noteId !== excludeNoteId) {
       sendServerMessage(conn.ws, message);
     }
   }

@@ -342,11 +342,10 @@
         if (localStorage.getItem("jot.autoOpenNewNotes") === "1" && !isUserTyping()) {
           setTimeout(() => { window.location.href = `/notes/${msg.note.id}`; }, 400);
         } else {
-          showToast(`📝 New note: ${msg.note.title || "untitled"}`, {
-            onClick: () => { window.location.href = `/notes/${msg.note.id}`; },
-          });
+          queueNewNoteToast(msg.note);
         }
       } else if (msg.type === "note-meta-updated" && msg.note) {
+        updatePendingNewNoteToast(msg.note);
         const row = noteList.querySelector(`[data-note-id="${CSS.escape(msg.note.id)}"]`);
         if (!row) return;
         const title = row.querySelector(".note-row-title");
@@ -666,11 +665,32 @@
       refs.previewContent.innerHTML = `<p>${escapeHtml(error.message || "Failed to load note.")}</p>`;
     });
 
+    function handleCrossNoteEvent(msg) {
+      if (msg.type === "note-created" && msg.note) {
+        if (state.note && msg.note.id === state.note.id) return;
+        if (localStorage.getItem("jot.autoOpenNewNotes") === "1" && !isUserTyping()) {
+          setTimeout(() => { window.location.href = `/notes/${msg.note.id}`; }, 400);
+          return;
+        }
+        queueNewNoteToast(msg.note);
+      } else if (msg.type === "note-meta-updated" && msg.note) {
+        updatePendingNewNoteToast(msg.note);
+      } else if (msg.type === "note-deleted" && msg.id) {
+        if (state.note && msg.id === state.note.id) {
+          showToast("⚠︎ This note was deleted", {
+            onClick: () => { window.location.href = `/`; },
+            duration: 8000,
+          });
+        }
+      }
+    }
+
     async function loadNote() {
       if (!isPublic) {
         // Load note metadata (shareAccess, threads, etc.) via REST
         const payload = await api(`/api/notes/${noteId}`);
         applyNotePayload(payload, refs, false);
+        connectGlobalWebSocket(handleCrossNoteEvent);
         return;
       }
 
@@ -713,27 +733,8 @@
             reloadFromServer(refsArg, publicMode);
             return;
           }
-          if (msg.type === "note-created" && msg.note) {
-            if (state.note && msg.note.id === state.note.id) return;
-            if (localStorage.getItem("jot.autoOpenNewNotes") === "1" && !isUserTyping()) {
-              setTimeout(() => { window.location.href = `/notes/${msg.note.id}`; }, 400);
-              return;
-            }
-            showToast(`📝 New note: ${msg.note.title || "untitled"}`, {
-              onClick: () => { window.location.href = `/notes/${msg.note.id}`; },
-            });
-            return;
-          }
-          if (msg.type === "note-deleted" && msg.id) {
-            if (state.note && msg.id === state.note.id) {
-              showToast("⚠︎ This note was deleted", {
-                onClick: () => { window.location.href = `/`; },
-                duration: 8000,
-              });
-            }
-            return;
-          }
-          if (msg.type === "note-meta-updated") {
+          if (msg.type === "note-created" || msg.type === "note-deleted" || msg.type === "note-meta-updated") {
+            handleCrossNoteEvent(msg);
             return;
           }
           if (msg.type !== "updated") {
@@ -1169,8 +1170,11 @@
       toast.id = "refreshToast";
       document.body.appendChild(toast);
     }
-    toast.className = "refresh-toast" + (opts.onClick ? " refresh-toast--clickable" : "");
-    toast.textContent = text;
+    toast.className = "refresh-toast"
+      + (opts.onClick ? " refresh-toast--clickable" : "")
+      + (opts.rich ? " refresh-toast--rich" : "");
+    if (opts.html) toast.innerHTML = opts.html;
+    else toast.textContent = text;
     toast.onclick = null;
     if (opts.onClick) toast.onclick = () => { opts.onClick(); toast.classList.remove("is-visible"); };
     requestAnimationFrame(() => toast.classList.add("is-visible"));
@@ -1180,6 +1184,38 @@
     }, opts.duration || 3600);
   }
   const showRefreshToast = (text) => showToast(text);
+
+  // Debounce buffer: coalesce a just-created note with its follow-up title
+  // update so the toast shows the real title instead of "untitled".
+  const pendingNewNoteToasts = new Map();
+  function queueNewNoteToast(note) {
+    const existing = pendingNewNoteToasts.get(note.id);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.note = note;
+      existing.timer = setTimeout(() => fireNewNoteToast(existing.note), 400);
+      return;
+    }
+    const entry = { note, timer: null };
+    entry.timer = setTimeout(() => fireNewNoteToast(entry.note), 400);
+    pendingNewNoteToasts.set(note.id, entry);
+  }
+  function updatePendingNewNoteToast(note) {
+    const existing = pendingNewNoteToasts.get(note.id);
+    if (!existing) return false;
+    existing.note = note;
+    return true;
+  }
+  function fireNewNoteToast(note) {
+    pendingNewNoteToasts.delete(note.id);
+    const title = note.title && note.title.trim() ? note.title : "untitled";
+    showToast("", {
+      html: `<span class="refresh-toast-emoji">🌺</span><span class="refresh-toast-text">New note: <strong>${escapeHtml(title)}</strong></span>`,
+      onClick: () => { window.location.href = `/notes/${note.id}`; },
+      duration: 6000,
+      rich: true,
+    });
+  }
 
   function isUserTyping() {
     const active = document.activeElement;

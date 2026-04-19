@@ -411,7 +411,19 @@ input:focus, textarea:focus { border-color: var(--muted); }
 }
 .refresh-toast.is-visible { opacity: 1; }
 .refresh-toast--clickable { cursor: pointer; pointer-events: auto; }
-.refresh-toast--clickable:hover { text-decoration: underline; }
+.refresh-toast--clickable:hover { text-decoration: none; filter: brightness(1.08); }
+.refresh-toast--rich {
+  padding: 0.65rem 1.1rem;
+  font-size: 0.95rem;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: 90vw;
+}
+.refresh-toast-emoji { font-size: 1.35rem; line-height: 1; }
+.refresh-toast-text { font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.refresh-toast-text strong { font-weight: 600; }
 
 /* --- List-row live animations --- */
 .note-row { transition: opacity 260ms ease, transform 260ms ease; }
