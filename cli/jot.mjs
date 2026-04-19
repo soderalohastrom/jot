@@ -459,10 +459,32 @@ switch (subCommand) {
   case "update": {
     const noteId = args[2];
     const field = args[3];
-    const value = args.slice(4).join(" ");
-    if (!noteId || !field || !value) {
+    const rest = args.slice(4);
+    const fileFlagIdx = rest.findIndex((a) => a === "--file");
+    let value;
+    if (fileFlagIdx !== -1) {
+      const filePath = rest[fileFlagIdx + 1];
+      if (!filePath) {
+        console.error("--file requires a path (or '-' for stdin)");
+        process.exit(1);
+      }
+      if (filePath === "-") {
+        value = fs.readFileSync(0, "utf8");
+      } else {
+        try {
+          value = fs.readFileSync(filePath, "utf8");
+        } catch (err) {
+          console.error(`Could not read ${filePath}: ${err.message}`);
+          process.exit(1);
+        }
+      }
+    } else {
+      value = rest.join(" ");
+    }
+    if (!noteId || !field || (fileFlagIdx === -1 && !value)) {
       console.error("Usage: jot <instance> update <id> title <value>");
       console.error("       jot <instance> update <id> markdown <value>");
+      console.error("       jot <instance> update <id> markdown --file <path|- for stdin>");
       process.exit(1);
     }
 
@@ -569,6 +591,7 @@ Owner commands:
   jot <instance> edit <id> '<edits>'       Apply edits (JSON array of {oldText, newText})
   jot <instance> update <id> title <val>   Update note title
   jot <instance> update <id> markdown <v>  Replace full markdown
+  jot <instance> update <id> markdown --file <path>  Read body from file (use '-' for stdin)
   jot <instance> delete <id>               Delete a note
   jot <instance> refresh <id> [message]    Nudge open browsers to reload this note
   jot <instance> destinations              List configured save destinations
