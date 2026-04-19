@@ -985,35 +985,58 @@
       destinations = [];
     }
 
-    if (destinations.length === 0) {
-      popover.innerHTML = `<div class="save-popover-title">Save to…</div><div class="save-popover-empty">No destinations configured.<br/>Edit <code>data/destinations.json</code>.</div>`;
-    } else {
-      popover.innerHTML = `<div class="save-popover-title">Save to…</div>` + destinations.map((d) => `
-        <div class="save-popover-row" data-destination-id="${escapeHtml(d.id)}">
-          <span class="save-popover-label">${escapeHtml(d.label)}</span>
-          <span class="save-popover-status"></span>
-        </div>
-      `).join("");
+    const adHocRow = `
+      <div class="save-popover-row save-popover-row--adhoc" data-action="pick-file">
+        <span class="save-popover-label">Save to… <span class="save-popover-hint">choose location</span></span>
+        <span class="save-popover-status"></span>
+      </div>
+    `;
+    const destinationRows = destinations.map((d) => `
+      <div class="save-popover-row" data-destination-id="${escapeHtml(d.id)}">
+        <span class="save-popover-label">${escapeHtml(d.label)}</span>
+        <span class="save-popover-status"></span>
+      </div>
+    `).join("");
+    const divider = destinations.length > 0 ? `<div class="save-popover-divider"></div>` : "";
 
-      popover.addEventListener("click", async (event) => {
-        const row = event.target.closest(".save-popover-row");
-        if (!row || !state.note) return;
-        const destId = row.dataset.destinationId;
-        const status = row.querySelector(".save-popover-status");
-        if (status) status.textContent = "saving…";
+    popover.innerHTML = `<div class="save-popover-title">Save to…</div>${adHocRow}${divider}${destinationRows}`;
+
+    popover.addEventListener("click", async (event) => {
+      const row = event.target.closest(".save-popover-row");
+      if (!row || !state.note) return;
+      const status = row.querySelector(".save-popover-status");
+
+      if (row.dataset.action === "pick-file") {
         try {
-          const result = await api(`/api/notes/${state.note.id}/save-to/${encodeURIComponent(destId)}`, { method: "POST" });
+          const savedName = await saveMarkdownViaPicker(state.note);
           row.classList.add("is-saved");
-          if (status) status.textContent = `✓ ${result.path.split("/").slice(-2).join("/")}`;
-          setTimeout(() => {
-            row.classList.remove("is-saved");
-            if (status) status.textContent = "";
-          }, 2500);
+          if (status) status.textContent = savedName ? `✓ ${savedName}` : "✓ saved";
+          setTimeout(() => { row.classList.remove("is-saved"); if (status) status.textContent = ""; }, 2500);
         } catch (err) {
+          if (err && err.name === "AbortError") {
+            if (status) status.textContent = "";
+            return;
+          }
           if (status) status.textContent = "failed";
         }
-      });
-    }
+        return;
+      }
+
+      const destId = row.dataset.destinationId;
+      if (!destId) return;
+      if (status) status.textContent = "saving…";
+      try {
+        const result = await api(`/api/notes/${state.note.id}/save-to/${encodeURIComponent(destId)}`, { method: "POST" });
+        row.classList.add("is-saved");
+        if (status) status.textContent = `✓ ${result.path.split("/").slice(-2).join("/")}`;
+        setTimeout(() => {
+          row.classList.remove("is-saved");
+          if (status) status.textContent = "";
+        }, 2500);
+      } catch (err) {
+        if (status) status.textContent = "failed";
+      }
+    });
 
     const closeHandler = (e) => {
       if (!popover.contains(e.target) && e.target.id !== "saveButton" && !e.target.closest("#savePopoverWrap")) {
@@ -1022,6 +1045,41 @@
       }
     };
     setTimeout(() => document.addEventListener("click", closeHandler), 0);
+  }
+
+  async function saveMarkdownViaPicker(note) {
+    const markdown = note.markdown || "";
+    const baseName = (note.title || "untitled")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "untitled";
+    const suggestedName = `${baseName}.md`;
+
+    if (typeof window.showSaveFilePicker === "function") {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{
+          description: "Markdown",
+          accept: { "text/markdown": [".md", ".markdown"], "text/plain": [".txt"] },
+        }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(markdown);
+      await writable.close();
+      return handle.name || suggestedName;
+    }
+
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = suggestedName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return suggestedName;
   }
 
   let refreshToastTimer = null;
