@@ -156,7 +156,7 @@ const subCommand = args[1];
 
 if (!subCommand) {
   console.error(`Usage: jot <instance> <command> [args...]`);
-  console.error(`Commands: list, search, read, create, edit, delete, update`);
+  console.error(`Commands: list, search, read, create, edit, delete, update, refresh, destinations, save-to`);
   process.exit(1);
 }
 
@@ -497,6 +497,42 @@ switch (subCommand) {
     break;
   }
 
+  case "refresh": {
+    const noteId = args[2];
+    if (!noteId) {
+      console.error("Usage: jot <instance> refresh <id> [message]");
+      process.exit(1);
+    }
+    const message = args.slice(3).join(" ").trim() || undefined;
+    await request(instance, "POST", `/api/notes/${noteId}/refresh`, message ? { message } : {});
+    console.log(message ? `Refreshed ${noteId}: ${message}` : `Refreshed ${noteId}`);
+    break;
+  }
+
+  case "destinations": {
+    const payload = await request(instance, "GET", "/api/destinations");
+    if (!payload.destinations || payload.destinations.length === 0) {
+      console.log("(no destinations configured)");
+      break;
+    }
+    for (const d of payload.destinations) {
+      console.log(`${d.id}\t${d.label}\t${d.kind}`);
+    }
+    break;
+  }
+
+  case "save-to": {
+    const noteId = args[2];
+    const destId = args[3];
+    if (!noteId || !destId) {
+      console.error("Usage: jot <instance> save-to <id> <destinationId>");
+      process.exit(1);
+    }
+    const payload = await request(instance, "POST", `/api/notes/${noteId}/save-to/${encodeURIComponent(destId)}`);
+    console.log(`Saved to ${payload.destination}: ${payload.path}`);
+    break;
+  }
+
   default:
     console.error(`Unknown command: ${subCommand}`);
     printUsage();
@@ -534,6 +570,9 @@ Owner commands:
   jot <instance> update <id> title <val>   Update note title
   jot <instance> update <id> markdown <v>  Replace full markdown
   jot <instance> delete <id>               Delete a note
+  jot <instance> refresh <id> [message]    Nudge open browsers to reload this note
+  jot <instance> destinations              List configured save destinations
+  jot <instance> save-to <id> <destId>     Save note markdown to a destination
 
 Shared note commands:
   jot <instance> read                     Read the shared note

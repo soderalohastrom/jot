@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 
 import express, { type NextFunction, type Request, type Response } from "express";
@@ -130,6 +131,7 @@ const port = Number(cliArg("port") || process.env.PORT || 3210);
 const dataDir = cliArg("data") || process.env.DATA_DIR || path.join(process.cwd(), "data");
 const notesDir = path.join(dataDir, "notes");
 const authFilePath = path.join(dataDir, "auth.json");
+const destinationsFilePath = path.join(dataDir, "destinations.json");
 const publicDir = path.join(path.resolve(__dirname, ".."), "public");
 const ownerSessionCookieName = "md_owner_session";
 const ownerLocalStorageTokenKey = "md_owner_token";
@@ -658,6 +660,45 @@ app.put("/api/notes/:id", requireOwnerApi, (req, res) => {
     broadcastNoteUpdate(note);
   }
   res.json({ ok: true, savedAt: note.updatedAt, shareAccess: note.shareAccess });
+});
+
+app.post("/api/notes/:id/refresh", requireOwnerApi, (req, res) => {
+  const note = notes.get(String(req.params.id));
+  if (!note) {
+    res.status(404).json({ ok: false, error: "Note not found." });
+    return;
+  }
+  const body = req.body || {};
+  const message = typeof body.message === "string" ? body.message.slice(0, 500) : undefined;
+  const reason = typeof body.reason === "string" ? body.reason.slice(0, 80) : undefined;
+  broadcastRefresh(note, { message, reason });
+  res.json({ ok: true });
+});
+
+app.get("/api/destinations", requireOwnerApi, (_req, res) => {
+  const destinations = loadDestinations().map(({ id, label, kind }) => ({ id, label, kind }));
+  res.json({ ok: true, destinations });
+});
+
+app.post("/api/notes/:id/save-to/:destinationId", requireOwnerApi, (req, res) => {
+  const note = notes.get(String(req.params.id));
+  if (!note) {
+    res.status(404).json({ ok: false, error: "Note not found." });
+    return;
+  }
+  const destId = String(req.params.destinationId);
+  const dest = loadDestinations().find((d) => d.id === destId);
+  if (!dest) {
+    res.status(404).json({ ok: false, error: `Unknown destination: ${destId}` });
+    return;
+  }
+  try {
+    const outputPath = saveNoteToDestination(note, dest);
+    res.json({ ok: true, destination: dest.label, path: outputPath });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ ok: false, error: msg });
+  }
 });
 
 app.get("/api/notes/:id/collab", requireOwnerApi, (req, res) => {
@@ -1248,7 +1289,7 @@ function handleEditorMessage(conn: ClientConn, data: string) {
   broadcastNoteUpdate(note);
 }
 
-type AnyServerMessage = (ServerHelloMessage & { clientId?: string }) | ServerMutationMessage | ServerPresenceMessage | ServerPresenceLeaveMessage | { type: "updated"; noteId: string; shareId: string; updatedAt: string } | { type: "threads-updated"; noteId: string; shareId: string };
+type AnyServerMessage = (ServerHelloMessage & { clientId?: string }) | ServerMutationMessage | ServerPresenceMessage | ServerPresenceLeaveMessage | { type: "updated"; noteId: string; shareId: string; updatedAt: string } | { type: "threads-updated"; noteId: string; shareId: string } | { type: "refresh"; noteId: string; shareId: string; message?: string; reason?: string };
 
 function sendServerMessage(ws: WebSocket, message: AnyServerMessage) {
   if (ws.readyState === 1) {
@@ -1329,6 +1370,21 @@ function broadcastNoteUpdate(note: NoteRecord) {
   }
 }
 
+function broadcastRefresh(note: NoteRecord, opts: { message?: string; reason?: string }) {
+  const message = {
+    type: "refresh" as const,
+    noteId: note.id,
+    shareId: note.shareId,
+    message: opts.message,
+    reason: opts.reason,
+  };
+  for (const conn of clients) {
+    if (conn.noteId === note.id || conn.shareId === note.shareId) {
+      sendServerMessage(conn.ws, message);
+    }
+  }
+}
+
 function broadcastThreadsUpdated(note: NoteRecord) {
   const message = { type: "threads-updated" as const, noteId: note.id, shareId: note.shareId };
   for (const conn of clients) {
@@ -1375,6 +1431,97 @@ server.listen(port, () => {
 function ensureDirectories() {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(notesDir, { recursive: true });
+}
+
+type Destination = {
+  id: string;
+  label: string;
+  kind: "file";
+  path: string;
+  filenameTemplate?: string;
+  frontmatter?: boolean;
+};
+
+const DEFAULT_DESTINATIONS: Destination[] = [
+  {
+    id: "wiki",
+    label: "Save to Wiki",
+    kind: "file",
+    path: "~/craft-wiki/sources/raw",
+    filenameTemplate: "{date}-{slug}.md",
+    frontmatter: true,
+  },
+];
+
+function loadDestinations(): Destination[] {
+  if (!fs.existsSync(destinationsFilePath)) {
+    const payload = { destinations: DEFAULT_DESTINATIONS };
+    fs.writeFileSync(destinationsFilePath, JSON.stringify(payload, null, 2) + "\n", "utf8");
+    return DEFAULT_DESTINATIONS;
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(destinationsFilePath, "utf8"));
+    if (Array.isArray(raw?.destinations)) {
+      return raw.destinations.filter((d: unknown): d is Destination =>
+        !!d && typeof d === "object" &&
+        typeof (d as Destination).id === "string" &&
+        typeof (d as Destination).label === "string" &&
+        (d as Destination).kind === "file" &&
+        typeof (d as Destination).path === "string"
+      );
+    }
+  } catch (err) {
+    console.error("destinations.json parse error:", err);
+  }
+  return [];
+}
+
+function expandHome(p: string): string {
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  if (p === "~") return os.homedir();
+  return p;
+}
+
+function slugify(title: string): string {
+  const s = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  return s || "untitled";
+}
+
+function renderFilename(template: string, note: NoteRecord): string {
+  const now = new Date();
+  const yyyy = String(now.getFullYear());
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hhmm = String(now.getHours()).padStart(2, "0") + String(now.getMinutes()).padStart(2, "0");
+  return template
+    .replace(/\{slug\}/g, slugify(note.title || "untitled"))
+    .replace(/\{date\}/g, `${yyyy}-${mm}-${dd}`)
+    .replace(/\{time\}/g, hhmm)
+    .replace(/\{id\}/g, note.id);
+}
+
+function saveNoteToDestination(note: NoteRecord, dest: Destination): string {
+  if (dest.kind !== "file") {
+    throw new Error(`Unsupported destination kind: ${(dest as { kind: string }).kind}`);
+  }
+  const dir = expandHome(dest.path);
+  fs.mkdirSync(dir, { recursive: true });
+  const filename = renderFilename(dest.filenameTemplate || "{date}-{slug}.md", note);
+  const outputPath = path.join(dir, filename);
+  const body = dest.frontmatter
+    ? [
+        "---",
+        `title: ${JSON.stringify(note.title || "untitled")}`,
+        "source: jot",
+        `noteId: ${note.id}`,
+        `savedAt: ${nowIso()}`,
+        "---",
+        "",
+        note.markdown,
+      ].join("\n")
+    : note.markdown;
+  fs.writeFileSync(outputPath, body, "utf8");
+  return outputPath;
 }
 
 function loadNotesIntoMemory() {

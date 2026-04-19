@@ -374,6 +374,40 @@ input:focus, textarea:focus { border-color: var(--muted); }
 .share-copy-disabled { opacity: 0.35; cursor: default; }
 .share-copy-disabled:hover { background: transparent; }
 
+/* --- Save-to popover --- */
+.save-popover-wrap { position: relative; display: inline-flex; }
+.save-popover {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 100;
+  background: var(--modal-bg); border: 1px solid var(--modal-border);
+  border-radius: 10px; padding: 0.4rem; min-width: 240px;
+  box-shadow: var(--shadow);
+}
+.save-popover-title {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted, #888); padding: 0.3rem 0.5rem 0.4rem;
+}
+.save-popover-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 0.5rem 0.6rem; border-radius: 6px; cursor: pointer;
+  font-size: 0.88rem; color: var(--text); user-select: none;
+}
+.save-popover-row:hover { background: var(--hover-bg, rgba(127,127,127,0.12)); }
+.save-popover-row .save-popover-status { font-size: 0.75rem; color: var(--text-muted, #888); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.save-popover-row.is-saved .save-popover-status { color: var(--accent, #34a853); }
+.save-popover-empty { padding: 0.6rem; color: var(--text-muted, #888); font-size: 0.85rem; }
+
+/* --- Refresh toast --- */
+.refresh-toast {
+  position: fixed; top: 3.5rem; left: 50%; transform: translateX(-50%);
+  background: var(--modal-bg); border: 1px solid var(--modal-border);
+  border-radius: 999px; padding: 0.45rem 0.95rem; font-size: 0.85rem;
+  color: var(--text); box-shadow: var(--shadow); z-index: 1000;
+  max-width: 80vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  opacity: 0; transition: opacity 180ms ease;
+  pointer-events: none;
+}
+.refresh-toast.is-visible { opacity: 1; }
+
 /* --- Disconnected banner --- */
 .editor-disconnected {
   position: absolute; top: 0; left: 0; right: 0; z-index: 10;

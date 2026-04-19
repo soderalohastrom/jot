@@ -379,6 +379,14 @@
       });
     }
 
+    const saveButton = document.getElementById("saveButton");
+    if (saveButton) {
+      saveButton.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleSavePopover(refs);
+      });
+    }
+
     const agentButton = document.getElementById("agentButton");
     if (agentButton) {
       agentButton.addEventListener("click", () => openAgentModal(refs));
@@ -644,6 +652,11 @@
             reloadThreads(publicMode);
             return;
           }
+          if (msg.type === "refresh") {
+            if (msg.message) showRefreshToast(msg.message);
+            reloadFromServer(refsArg, publicMode);
+            return;
+          }
           if (msg.type !== "updated") {
             return;
           }
@@ -782,6 +795,10 @@
           <div class="topbar-right">
             <jot-icon-button icon="preview" label="Preview" id="previewFab"></jot-icon-button>
             <jot-icon-button icon="robot" label="Agent setup" id="agentButton"></jot-icon-button>
+            <div class="save-popover-wrap" id="savePopoverWrap">
+              <jot-icon-button icon="save" label="Save to…" id="saveButton"></jot-icon-button>
+              <div class="save-popover hidden" id="savePopover"></div>
+            </div>
             <div class="share-popover-wrap" id="sharePopoverWrap">
               <jot-icon-button icon="share" label="Share" id="shareButton"></jot-icon-button>
               <div class="share-popover hidden" id="sharePopover"></div>
@@ -951,6 +968,77 @@
     });
     const closeHandler = (e) => { if (!popover.contains(e.target) && e.target.id !== "shareButton") { popover.classList.add("hidden"); document.removeEventListener("click", closeHandler); } };
     setTimeout(() => document.addEventListener("click", closeHandler), 0);
+  }
+
+  async function toggleSavePopover(_refs) {
+    const popover = document.getElementById("savePopover");
+    if (!popover) return;
+    if (!popover.classList.contains("hidden")) { popover.classList.add("hidden"); return; }
+    popover.innerHTML = `<div class="save-popover-title">Save to…</div><div class="save-popover-empty">Loading…</div>`;
+    popover.classList.remove("hidden");
+
+    let destinations = [];
+    try {
+      const payload = await api("/api/destinations");
+      destinations = Array.isArray(payload.destinations) ? payload.destinations : [];
+    } catch {
+      destinations = [];
+    }
+
+    if (destinations.length === 0) {
+      popover.innerHTML = `<div class="save-popover-title">Save to…</div><div class="save-popover-empty">No destinations configured.<br/>Edit <code>data/destinations.json</code>.</div>`;
+    } else {
+      popover.innerHTML = `<div class="save-popover-title">Save to…</div>` + destinations.map((d) => `
+        <div class="save-popover-row" data-destination-id="${escapeHtml(d.id)}">
+          <span class="save-popover-label">${escapeHtml(d.label)}</span>
+          <span class="save-popover-status"></span>
+        </div>
+      `).join("");
+
+      popover.addEventListener("click", async (event) => {
+        const row = event.target.closest(".save-popover-row");
+        if (!row || !state.note) return;
+        const destId = row.dataset.destinationId;
+        const status = row.querySelector(".save-popover-status");
+        if (status) status.textContent = "saving…";
+        try {
+          const result = await api(`/api/notes/${state.note.id}/save-to/${encodeURIComponent(destId)}`, { method: "POST" });
+          row.classList.add("is-saved");
+          if (status) status.textContent = `✓ ${result.path.split("/").slice(-2).join("/")}`;
+          setTimeout(() => {
+            row.classList.remove("is-saved");
+            if (status) status.textContent = "";
+          }, 2500);
+        } catch (err) {
+          if (status) status.textContent = "failed";
+        }
+      });
+    }
+
+    const closeHandler = (e) => {
+      if (!popover.contains(e.target) && e.target.id !== "saveButton" && !e.target.closest("#savePopoverWrap")) {
+        popover.classList.add("hidden");
+        document.removeEventListener("click", closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener("click", closeHandler), 0);
+  }
+
+  let refreshToastTimer = null;
+  function showRefreshToast(text) {
+    let toast = document.getElementById("refreshToast");
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.id = "refreshToast";
+      toast.className = "refresh-toast";
+      document.body.appendChild(toast);
+    }
+    toast.textContent = text;
+    requestAnimationFrame(() => toast.classList.add("is-visible"));
+    if (refreshToastTimer) clearTimeout(refreshToastTimer);
+    refreshToastTimer = setTimeout(() => {
+      toast.classList.remove("is-visible");
+    }, 3200);
   }
 
   function openAgentModal(refs) {
