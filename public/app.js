@@ -442,12 +442,7 @@
       });
     }
 
-    const agentButton = document.getElementById("agentButton");
-    if (agentButton) {
-      agentButton.addEventListener("click", () => openAgentModal(refs));
-    }
-
-    if (resolvedButton) {
+if (resolvedButton) {
       resolvedButton.addEventListener("click", () => {
         state.showResolved = !state.showResolved;
         updateResolvedButton(resolvedButton);
@@ -566,6 +561,30 @@
           stage.classList.add("preview-open");
           previewFab.style.display = "none";
         }
+      });
+    }
+
+    // Zen mode: hide the raw-markdown pane, let the rendered preview fill the viewport.
+    const zenButton = document.getElementById("zenButton");
+    const workspace = document.querySelector(".workspace");
+    function applyZen(on) {
+      if (!workspace) return;
+      workspace.classList.toggle("workspace--zen", !!on);
+      if (zenButton) {
+        const inner = zenButton.querySelector("button");
+        if (inner) {
+          inner.innerHTML = (window.__ICONS__ || {})[on ? "zenOff" : "zen"] || inner.innerHTML;
+          inner.setAttribute("aria-label", on ? "Exit Zen mode" : "Zen mode (hide raw)");
+          inner.title = on ? "Exit Zen mode" : "Zen mode (hide raw)";
+        }
+      }
+    }
+    applyZen(localStorage.getItem("jot.zenMode") === "1");
+    if (zenButton) {
+      zenButton.addEventListener("click", () => {
+        const next = !(localStorage.getItem("jot.zenMode") === "1");
+        localStorage.setItem("jot.zenMode", next ? "1" : "0");
+        applyZen(next);
       });
     }
 
@@ -873,8 +892,8 @@
             <span class="status-text" id="saveStatus"></span>
           </div>
           <div class="topbar-right">
+            <jot-icon-button icon="zen" label="Zen mode (hide raw)" id="zenButton"></jot-icon-button>
             <jot-icon-button icon="preview" label="Preview" id="previewFab"></jot-icon-button>
-            <jot-icon-button icon="robot" label="Agent setup" id="agentButton"></jot-icon-button>
             <div class="save-popover-wrap" id="savePopoverWrap">
               <jot-icon-button icon="save" label="Save to…" id="saveButton"></jot-icon-button>
               <div class="save-popover hidden" id="savePopover"></div>
@@ -933,7 +952,6 @@
             </div>
           </div>
           <div class="topbar-right">
-            <jot-icon-button icon="robot" label="Agent setup" id="agentButton"></jot-icon-button>
             <button type="button" class="jot-btn-icon jot-btn-icon--md theme-toggle" aria-label="Toggle theme">${themeIcon(document.documentElement.getAttribute("data-theme") || "dark")}</button>
           </div>
         </header>
@@ -965,8 +983,8 @@
             <span class="status-text" id="saveStatus"></span>
           </div>
           <div class="topbar-right">
+            <jot-icon-button icon="zen" label="Zen mode (hide raw)" id="zenButton"></jot-icon-button>
             <jot-icon-button icon="preview" label="Preview" id="previewFab"></jot-icon-button>
-            <jot-icon-button icon="robot" label="Agent setup" id="agentButton"></jot-icon-button>
             <button type="button" class="jot-btn-icon jot-btn-icon--md theme-toggle" aria-label="Toggle theme">${themeIcon(document.documentElement.getAttribute("data-theme") || "dark")}</button>
           </div>
         </header>
@@ -1247,110 +1265,6 @@
     connect();
   }
 
-  function openAgentModal(refs) {
-    const baseUrl = `${location.protocol}//${location.host}`;
-    const currentNoteId = state.note?.id || "<note-id>";
-    const isOwnerView = state.viewer?.isOwner;
-
-    const lines = [];
-    if (isOwnerView) {
-      lines.push(
-        `# Your user wants you to interact with a jot note using the CLI below.`,
-        `# Run the commands as needed to read, edit, and comment on the note.`,
-        ``,
-        `npm install -g @mariozechner/jot`,
-        ``,
-        `# Connect`,
-        `jot register my-jot ${baseUrl} <YOUR_API_KEY>`,
-        ``,
-        `# List notes`,
-        `jot my-jot list`,
-        ``,
-        `# Read this note (includes thread/message IDs)`,
-        `jot my-jot read ${currentNoteId}`,
-        ``,
-        `# Create a note`,
-        `jot my-jot create "My note title"`,
-        ``,
-        `# Edit this note`,
-        `jot my-jot edit ${currentNoteId} '[{"oldText":"...","newText":"..."}]'`,
-        ``,
-        `# Comment on text in this note`,
-        `jot my-jot comment ${currentNoteId} "quoted text" "comment body"`,
-        ``,
-        `# Reply to a specific message`,
-        `jot my-jot reply ${currentNoteId} <thread-id> <message-id> "reply"`,
-        ``,
-        `# Edit or delete a comment`,
-        `jot my-jot edit-comment ${currentNoteId} <message-id> "new body"`,
-        `jot my-jot delete-comment ${currentNoteId} <message-id>`,
-        ``,
-        `# Resolve, reopen, or delete a thread`,
-        `jot my-jot resolve ${currentNoteId} <thread-id>`,
-        `jot my-jot reopen ${currentNoteId} <thread-id>`,
-        `jot my-jot delete-thread ${currentNoteId} <thread-id>`,
-        ``,
-        `# Full command reference`,
-        `jot --help`,
-      );
-    } else {
-      const shareUrl = `${baseUrl}/s/${state.note?.shareId || shareId}`;
-      lines.push(
-        `# Your user wants you to interact with a shared jot note using the CLI below.`,
-        `# Run the commands as needed to read, edit, and comment on the note.`,
-        ``,
-        `npm install -g @mariozechner/jot`,
-        ``,
-        `# Connect to the shared note`,
-        `jot register my-jot ${shareUrl}`,
-        ``,
-        `# Read the note (includes thread/message IDs)`,
-        `jot my-jot read`,
-        ``,
-        `# Edit the note (if edit access)`,
-        `jot my-jot edit '[{"oldText":"...","newText":"..."}]'`,
-        ``,
-        `# Comment on text`,
-        `jot my-jot comment "quoted text" "comment body" --name="My Agent"`,
-        ``,
-        `# Reply to a specific message`,
-        `jot my-jot reply <thread-id> <message-id> "reply" --name="My Agent"`,
-        ``,
-        `# Full command reference`,
-        `jot --help`,
-      );
-    }
-    const instructions = lines.join("\n");
-    const hint = isOwnerView
-      ? "Create an API key in settings on the landing page, then give your agent these instructions:"
-      : "Give your agent these instructions to interact with this note:";
-
-    if (!refs.modalBackdrop) return;
-    state.modalOpen = true;
-    refs.modalBackdrop.classList.remove("hidden");
-    refs.modalBackdrop.innerHTML = `
-      <div class="modal agent-modal" role="dialog" aria-modal="true">
-        <div class="settings-header">
-          <h2 class="settings-title">Agent setup</h2>
-          <jot-icon-button icon="close" label="Close" id="agentModalClose"></jot-icon-button>
-        </div>
-        <p class="agent-hint">${escapeHtml(hint)}</p>
-        <pre class="agent-instructions"><code>${escapeHtml(instructions)}</code></pre>
-        <jot-button variant="ghost" size="sm" id="agentCopyBtn">copy to clipboard</jot-button>
-      </div>
-    `;
-
-    const close = () => { closeModal(refs); };
-    refs.modalBackdrop.querySelector("#agentModalClose").addEventListener("click", close);
-    refs.modalBackdrop.addEventListener("click", (e) => { if (e.target === refs.modalBackdrop) close(); });
-    refs.modalBackdrop.querySelector("#agentCopyBtn").addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(instructions);
-        setButtonLabel(refs.modalBackdrop.querySelector("#agentCopyBtn"), "copied!");
-        setTimeout(() => setButtonLabel(refs.modalBackdrop.querySelector("#agentCopyBtn"), "copy to clipboard"), 1500);
-      } catch {}
-    });
-  }
 
   function openIdentityModalAsync(refs) {
     return new Promise((resolve) => {
