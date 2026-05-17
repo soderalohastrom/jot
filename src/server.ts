@@ -480,6 +480,7 @@ app.post("/api/notes/:id/threads", requireOwnerApi, (req, res) => {
     persistNote(note, { ...ident, reason: "thread-change" });
   }
   broadcastThreadsUpdated(note);
+  fireWebhook({ event: "thread-created", noteId: note.id, noteTitle: note.title, threadId: thread.id, quote, body, authorName });
   res.json({ ok: true, thread: { id: thread.id } });
 });
 
@@ -526,6 +527,7 @@ app.post("/api/notes/:id/threads/:threadId/replies", requireOwnerApi, (req, res)
   note.updatedAt = timestamp;
   persistNote(note, { ...resolveAuthorFromReq(req), reason: "thread-change" });
   broadcastThreadsUpdated(note);
+  fireWebhook({ event: "thread-reply", noteId: note.id, noteTitle: note.title, threadId: thread.id, parentMessageId, body, authorName });
   res.json({ ok: true });
 });
 
@@ -1049,6 +1051,15 @@ app.post("/api/share/:shareId/threads", (req, res) => {
     reason: "thread-change",
   });
   broadcastThreadsUpdated(note);
+  fireWebhook({
+    event: "thread-created",
+    noteId: note.id,
+    noteTitle: note.title,
+    threadId: thread.id,
+    quote: anchor.quote,
+    body,
+    authorName: identity.authorName,
+  });
   res.json({ ok: true, threads: serializeThreads(note, req) });
 });
 
@@ -1099,6 +1110,15 @@ app.post("/api/share/:shareId/threads/:threadId/replies", (req, res) => {
     reason: "thread-change",
   });
   broadcastThreadsUpdated(note);
+  fireWebhook({
+    event: "thread-reply",
+    noteId: note.id,
+    noteTitle: note.title,
+    threadId: thread.id,
+    parentMessageId,
+    body,
+    authorName: identity.authorName,
+  });
   res.json({ ok: true, threads: serializeThreads(note, req) });
 });
 
@@ -2151,6 +2171,32 @@ function renderMarkdown(markdown: string) {
 
 function makeShareUrl(req: Request, shareId: string) {
   return `${req.protocol}://${req.get("host")}/s/${shareId}`;
+}
+
+type WebhookPayload = {
+  event: string;
+  noteId: string;
+  noteTitle: string;
+  threadId?: string;
+  quote?: string;
+  body?: string;
+  authorName?: string;
+  parentMessageId?: string;
+};
+
+function fireWebhook(payload: WebhookPayload) {
+  const url = process.env.JOT_WEBHOOK_URL;
+  if (!url) return;
+  const body = JSON.stringify({
+    ...payload,
+    ts: nowIso(),
+    url: `http://localhost:3210/notes/${payload.noteId}`,
+  });
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  }).catch((err) => console.error("[webhook]", err.message));
 }
 
 function nowIso() {
