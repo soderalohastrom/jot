@@ -62,6 +62,48 @@ function isShareInstance(instance) {
   return Boolean(instance.shareId && !instance.token);
 }
 
+function computeLineDiff(oldText, newText) {
+  // Simple LCS line diff. For typical markdown notes (a few hundred lines)
+  // this is fine; if perf ever matters we'd swap to Myers via the diff lib.
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
+      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const segs = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) { segs.push({ kind: "ctx", line: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { segs.push({ kind: "del", line: a[i] }); i++; }
+    else { segs.push({ kind: "add", line: b[j] }); j++; }
+  }
+  while (i < m) { segs.push({ kind: "del", line: a[i++] }); }
+  while (j < n) { segs.push({ kind: "add", line: b[j++] }); }
+  return segs;
+}
+
+function printUnifiedDiff(revision, currentMarkdown) {
+  const segs = computeLineDiff(revision.body, currentMarkdown);
+  const useColor = process.stdout.isTTY;
+  const RED = useColor ? "\x1b[31m" : "";
+  const GREEN = useColor ? "\x1b[32m" : "";
+  const DIM = useColor ? "\x1b[2m" : "";
+  const RESET = useColor ? "\x1b[0m" : "";
+  console.log(`--- ${revision.id} (${revision.author_name} @ ${revision.ts})`);
+  console.log(`+++ current`);
+  for (const s of segs) {
+    if (s.kind === "del") console.log(`${RED}-${s.line}${RESET}`);
+    else if (s.kind === "add") console.log(`${GREEN}+${s.line}${RESET}`);
+    else console.log(`${DIM} ${s.line}${RESET}`);
+  }
+}
+
 const args = process.argv.slice(2);
 const command = args[0];
 
@@ -555,6 +597,58 @@ switch (subCommand) {
     break;
   }
 
+  case "revisions": {
+    const noteId = args[2];
+    if (!noteId) {
+      console.error("Usage: jot <instance> revisions <id> [--diff <revId> | --show <revId> | --restore <revId>] [--author <name>] [--limit N]");
+      process.exit(1);
+    }
+    const rest = args.slice(3);
+    const diffIdx = rest.findIndex((a) => a === "--diff");
+    const showIdx = rest.findIndex((a) => a === "--show");
+    const restoreIdx = rest.findIndex((a) => a === "--restore");
+    const authorIdx = rest.findIndex((a) => a === "--author");
+    const limitIdx = rest.findIndex((a) => a === "--limit");
+
+    if (diffIdx !== -1) {
+      const revId = rest[diffIdx + 1];
+      if (!revId) { console.error("--diff requires a revision id"); process.exit(1); }
+      const payload = await request(instance, "GET", `/api/notes/${noteId}/revisions/${encodeURIComponent(revId)}`);
+      printUnifiedDiff(payload.revision, payload.currentMarkdown);
+      break;
+    }
+    if (showIdx !== -1) {
+      const revId = rest[showIdx + 1];
+      if (!revId) { console.error("--show requires a revision id"); process.exit(1); }
+      const payload = await request(instance, "GET", `/api/notes/${noteId}/revisions/${encodeURIComponent(revId)}`);
+      process.stdout.write(payload.revision.body);
+      if (!payload.revision.body.endsWith("\n")) process.stdout.write("\n");
+      break;
+    }
+    if (restoreIdx !== -1) {
+      const revId = rest[restoreIdx + 1];
+      if (!revId) { console.error("--restore requires a revision id"); process.exit(1); }
+      const payload = await request(instance, "POST", `/api/notes/${noteId}/revisions/${encodeURIComponent(revId)}/restore`);
+      console.log(`Restored from ${payload.restoredFrom} at ${payload.savedAt}`);
+      break;
+    }
+
+    const params = new URLSearchParams();
+    if (authorIdx !== -1 && rest[authorIdx + 1]) params.set("author", rest[authorIdx + 1]);
+    if (limitIdx !== -1 && rest[limitIdx + 1]) params.set("limit", rest[limitIdx + 1]);
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    const payload = await request(instance, "GET", `/api/notes/${noteId}/revisions${qs}`);
+    if (!payload.revisions || payload.revisions.length === 0) {
+      console.log("(no revisions yet)");
+      break;
+    }
+    for (const r of payload.revisions) {
+      const reason = r.reason ? `\t(${r.reason})` : "";
+      console.log(`${r.id}\t${r.ts}\t${r.author_name}\t${r.body_size}B${reason}\t${r.title}`);
+    }
+    break;
+  }
+
   default:
     console.error(`Unknown command: ${subCommand}`);
     printUsage();
@@ -596,6 +690,11 @@ Owner commands:
   jot <instance> refresh <id> [message]    Nudge open browsers to reload this note
   jot <instance> destinations              List configured save destinations
   jot <instance> save-to <id> <destId>     Save note markdown to a destination
+  jot <instance> revisions <id>            List revision history (id, ts, author, size, reason, title)
+  jot <instance> revisions <id> --diff <revId>     Print unified diff of revId vs current
+  jot <instance> revisions <id> --show <revId>     Print body at revId to stdout
+  jot <instance> revisions <id> --restore <revId>  Restore note to revId (creates new revision)
+  jot <instance> revisions <id> [--author <name>] [--limit N]   Filter the list
 
 Shared note commands:
   jot <instance> read                     Read the shared note

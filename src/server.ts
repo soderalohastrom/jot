@@ -29,6 +29,20 @@ import {
 import hljs from "highlight.js";
 import { marked, type Tokens } from "marked";
 import sanitizeHtml from "sanitize-html";
+import * as Diff from "diff";
+
+import {
+  initRevisions,
+  maybeRecordRevision,
+  importInitialRevision,
+  listRevisions,
+  getRevision,
+  countRevisionsForNote,
+  type AuthorKind,
+  type RevisionRow,
+  type RevisionMeta,
+  type RecordOpts,
+} from "./revisions.js";
 
 
 type CommentAnchor = {
@@ -162,7 +176,9 @@ marked.setOptions({
 });
 
 ensureDirectories();
+initRevisions(dataDir);
 loadNotesIntoMemory();
+seedImportRevisions();
 
 const app = express();
 app.set("trust proxy", true);
@@ -387,7 +403,10 @@ app.post("/api/notes/:id/edit", requireOwnerApi, (req, res) => {
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "title")) {
     note.title = normalizeTitle(String(req.body.title || note.title));
   }
-  persistNote(note, false);
+  {
+    const ident = resolveAuthorFromReq(req);
+    persistNote(note, { broadcast: false, ...ident, reason: "api-edit" });
+  }
 
   if (titleChanged) {
     broadcastEditorHello(note);
@@ -456,7 +475,10 @@ app.post("/api/notes/:id/threads", requireOwnerApi, (req, res) => {
 
   note.threads.push(thread);
   note.updatedAt = nowIso();
-  persistNote(note);
+  {
+    const ident = resolveAuthorFromReq(req);
+    persistNote(note, { ...ident, reason: "thread-change" });
+  }
   broadcastThreadsUpdated(note);
   res.json({ ok: true, thread: { id: thread.id } });
 });
@@ -502,7 +524,7 @@ app.post("/api/notes/:id/threads/:threadId/replies", requireOwnerApi, (req, res)
   });
   thread.updatedAt = timestamp;
   note.updatedAt = timestamp;
-  persistNote(note);
+  persistNote(note, { ...resolveAuthorFromReq(req), reason: "thread-change" });
   broadcastThreadsUpdated(note);
   res.json({ ok: true });
 });
@@ -515,7 +537,7 @@ app.patch("/api/notes/:id/threads/:threadId", requireOwnerApi, (req, res) => {
   thread.resolved = Boolean(req.body.resolved);
   thread.updatedAt = nowIso();
   note.updatedAt = thread.updatedAt;
-  persistNote(note);
+  persistNote(note, { ...resolveAuthorFromReq(req), reason: "thread-change" });
   broadcastThreadsUpdated(note);
   res.json({ ok: true });
 });
@@ -525,7 +547,7 @@ app.delete("/api/notes/:id/threads/:threadId", requireOwnerApi, (req, res) => {
   if (!note) { res.status(404).json({ ok: false, error: "Note not found." }); return; }
   note.threads = note.threads.filter((t) => t.id !== String(req.params.threadId));
   note.updatedAt = nowIso();
-  persistNote(note);
+  persistNote(note, { ...resolveAuthorFromReq(req), reason: "thread-change" });
   broadcastThreadsUpdated(note);
   res.json({ ok: true });
 });
@@ -541,7 +563,7 @@ app.patch("/api/notes/:id/messages/:messageId", requireOwnerApi, (req, res) => {
   located.message.updatedAt = nowIso();
   located.thread.updatedAt = located.message.updatedAt;
   note.updatedAt = located.message.updatedAt;
-  persistNote(note);
+  persistNote(note, { ...resolveAuthorFromReq(req), reason: "thread-change" });
   broadcastThreadsUpdated(note);
   res.json({ ok: true });
 });
@@ -558,7 +580,7 @@ app.delete("/api/notes/:id/messages/:messageId", requireOwnerApi, (req, res) => 
     located.thread.updatedAt = nowIso();
   }
   note.updatedAt = nowIso();
-  persistNote(note);
+  persistNote(note, { ...resolveAuthorFromReq(req), reason: "thread-change" });
   broadcastThreadsUpdated(note);
   res.json({ ok: true });
 });
@@ -584,8 +606,8 @@ app.get("/api/notes", requireOwnerApi, (req, res) => {
   res.json({ ok: true, notes: results });
 });
 
-app.post("/api/notes", requireOwnerApi, (_req, res) => {
-  const note = createNote();
+app.post("/api/notes", requireOwnerApi, (req, res) => {
+  const note = createNote({ ...resolveAuthorFromReq(req), reason: "create" });
   const summary = summarizeNote(note, "");
   broadcastGlobal({ type: "note-created", note: summary });
   res.json({ ok: true, note: summary });
@@ -654,7 +676,17 @@ app.put("/api/notes/:id", requireOwnerApi, (req, res) => {
     note.markdown = nextMarkdown;
   }
   note.updatedAt = nowIso();
-  persistNote(note, false);
+  {
+    const ident = resolveAuthorFromReq(req);
+    const reason = markdownChanged
+      ? "api-update"
+      : titleChanged
+        ? "rename"
+        : shareAccessChanged
+          ? "share-access-change"
+          : "api-touch";
+    persistNote(note, { broadcast: false, ...ident, reason });
+  }
   if (shareAccessChanged) {
     enforceShareAccessForConnections(note);
   }
@@ -679,12 +711,87 @@ app.post("/api/notes/:id/refresh", requireOwnerApi, (req, res) => {
   res.json({ ok: true });
 });
 
+// Admin reload — re-reads notes/ from disk into the in-memory Map and
+// nudges every connected editor to refetch. Used by the Mac → VPS sync
+// cron after rsync drops new files into data/notes/.
+app.post("/api/admin/reload", requireOwnerApi, (_req, res) => {
+  const before = notes.size;
+  loadNotesIntoMemory();
+  seedImportRevisions();
+  const after = notes.size;
+  for (const note of notes.values()) {
+    broadcastRefresh(note, { reason: "admin-reload" });
+  }
+  res.json({ ok: true, before, after, reloadedAt: nowIso() });
+});
+
+app.get("/api/notes/:id/revisions", requireOwnerApi, (req, res) => {
+  const note = notes.get(String(req.params.id));
+  if (!note) {
+    res.status(404).json({ ok: false, error: "Note not found." });
+    return;
+  }
+  const author = typeof req.query.author === "string" ? req.query.author : undefined;
+  const since = typeof req.query.since === "string" ? req.query.since : undefined;
+  const limit = req.query.limit ? Math.max(1, Math.min(1000, Number(req.query.limit))) : undefined;
+  const revisions = listRevisions(note.id, { author, since, limit });
+  res.json({ ok: true, revisions });
+});
+
+app.get("/api/notes/:id/revisions/:revId", requireOwnerApi, (req, res) => {
+  const note = notes.get(String(req.params.id));
+  if (!note) {
+    res.status(404).json({ ok: false, error: "Note not found." });
+    return;
+  }
+  const row = getRevision(String(req.params.revId));
+  if (!row || row.note_id !== note.id) {
+    res.status(404).json({ ok: false, error: "Revision not found." });
+    return;
+  }
+  // Unified line diff: revision body → current note markdown.
+  // diffLines returns segments where `added`/`removed` flags annotate direction.
+  const segments = Diff.diffLines(row.body, note.markdown).map((part) => ({
+    added: Boolean(part.added),
+    removed: Boolean(part.removed),
+    value: part.value,
+    count: part.count,
+  }));
+  res.json({ ok: true, revision: row, currentMarkdown: note.markdown, currentTitle: note.title, diff: segments });
+});
+
+app.post("/api/notes/:id/revisions/:revId/restore", requireOwnerApi, (req, res) => {
+  const note = notes.get(String(req.params.id));
+  if (!note) {
+    res.status(404).json({ ok: false, error: "Note not found." });
+    return;
+  }
+  const row = getRevision(String(req.params.revId));
+  if (!row || row.note_id !== note.id) {
+    res.status(404).json({ ok: false, error: "Revision not found." });
+    return;
+  }
+  // Restore = create a new revision with the prior body. Never destructive.
+  // We rebuild the CRDT state from the restored markdown so editor clients
+  // see the change cleanly via broadcastEditorHello.
+  note.collab = collabFromMarkdown(row.body, note.collab.serverCounter + 1);
+  note.markdown = row.body;
+  note.title = row.title;
+  note.updatedAt = nowIso();
+  const ident = resolveAuthorFromReq(req);
+  persistNote(note, { broadcast: false, ...ident, reason: `restore:${row.id}` });
+  broadcastEditorHello(note);
+  broadcastNoteUpdate(note);
+  broadcastGlobal({ type: "note-meta-updated", note: summarizeNote(note, "") }, note.id);
+  res.json({ ok: true, restoredFrom: row.id, savedAt: note.updatedAt });
+});
+
 app.get("/api/destinations", requireOwnerApi, (_req, res) => {
   const destinations = loadDestinations().map(({ id, label, kind }) => ({ id, label, kind }));
   res.json({ ok: true, destinations });
 });
 
-app.post("/api/notes/:id/save-to/:destinationId", requireOwnerApi, (req, res) => {
+app.post("/api/notes/:id/save-to/:destinationId", requireOwnerApi, async (req, res) => {
   const note = notes.get(String(req.params.id));
   if (!note) {
     res.status(404).json({ ok: false, error: "Note not found." });
@@ -697,8 +804,8 @@ app.post("/api/notes/:id/save-to/:destinationId", requireOwnerApi, (req, res) =>
     return;
   }
   try {
-    const outputPath = saveNoteToDestination(note, dest);
-    res.json({ ok: true, destination: dest.label, path: outputPath });
+    const { path: outputPath, url } = await saveNoteToDestination(note, dest);
+    res.json({ ok: true, destination: dest.label, path: outputPath, ...(url ? { url } : {}) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({ ok: false, error: msg });
@@ -824,7 +931,15 @@ app.post("/api/share/:shareId/edit", (req, res) => {
   note.collab = workingCollab;
   note.markdown = markdown;
   note.updatedAt = nowIso();
-  persistNote(note, false);
+  {
+    const commenter = getCommenterIdentity(req);
+    persistNote(note, {
+      broadcast: false,
+      author: commenter.name || "Anonymous",
+      authorKind: "share-editor",
+      reason: "share-edit",
+    });
+  }
 
   if (idListUpdates.length > 0) {
     broadcastEditorMutation(note, {
@@ -928,7 +1043,11 @@ app.post("/api/share/:shareId/threads", (req, res) => {
 
   note.threads.push(thread);
   note.updatedAt = nowIso();
-  persistNote(note);
+  persistNote(note, {
+    author: identity.authorName || "Anonymous",
+    authorKind: "share-editor",
+    reason: "thread-change",
+  });
   broadcastThreadsUpdated(note);
   res.json({ ok: true, threads: serializeThreads(note, req) });
 });
@@ -974,7 +1093,11 @@ app.post("/api/share/:shareId/threads/:threadId/replies", (req, res) => {
   });
   thread.updatedAt = timestamp;
   note.updatedAt = timestamp;
-  persistNote(note);
+  persistNote(note, {
+    author: identity.authorName || "Anonymous",
+    authorKind: "share-editor",
+    reason: "thread-change",
+  });
   broadcastThreadsUpdated(note);
   res.json({ ok: true, threads: serializeThreads(note, req) });
 });
@@ -997,7 +1120,11 @@ app.patch("/api/share/:shareId/threads/:threadId", (req, res) => {
   thread.resolved = Boolean(req.body.resolved);
   thread.updatedAt = nowIso();
   note.updatedAt = thread.updatedAt;
-  persistNote(note);
+  persistNote(note, {
+    author: getCommenterIdentity(req).name || "Anonymous",
+    authorKind: "share-editor",
+    reason: "thread-change",
+  });
   broadcastThreadsUpdated(note);
   res.json({ ok: true, threads: serializeThreads(note, req) });
 });
@@ -1019,7 +1146,7 @@ app.delete("/api/share/:shareId/threads/:threadId", (req, res) => {
 
   note.threads = note.threads.filter((item) => item.id !== thread.id);
   note.updatedAt = nowIso();
-  persistNote(note);
+  persistNote(note, { ...resolveAuthorFromReq(req), reason: "thread-change" });
   broadcastThreadsUpdated(note);
   res.json({ ok: true, threads: serializeThreads(note, req) });
 });
@@ -1049,7 +1176,11 @@ app.patch("/api/share/:shareId/messages/:messageId", (req, res) => {
   located.message.updatedAt = nowIso();
   located.thread.updatedAt = located.message.updatedAt;
   note.updatedAt = located.message.updatedAt;
-  persistNote(note);
+  persistNote(note, {
+    author: getCommenterIdentity(req).name || "Anonymous",
+    authorKind: "share-editor",
+    reason: "thread-change",
+  });
   broadcastThreadsUpdated(note);
   res.json({ ok: true, threads: serializeThreads(note, req) });
 });
@@ -1077,7 +1208,11 @@ app.delete("/api/share/:shareId/messages/:messageId", (req, res) => {
   }
 
   note.updatedAt = nowIso();
-  persistNote(note);
+  persistNote(note, {
+    author: getCommenterIdentity(req).name || "Anonymous",
+    authorKind: "share-editor",
+    reason: "thread-change",
+  });
   broadcastThreadsUpdated(note);
   res.json({ ok: true, threads: serializeThreads(note, req) });
 });
@@ -1290,7 +1425,12 @@ function handleEditorMessage(conn: ClientConn, data: string) {
   note.collab = result.state;
   note.markdown = result.markdown;
   note.updatedAt = nowIso();
-  persistNote(note, false);
+  {
+    const author = conn.name || "Owner";
+    const authorKind: AuthorKind =
+      conn.kind === "public-editor" ? "share-editor" : "owner";
+    persistNote(note, { broadcast: false, author, authorKind, reason: "crdt-flush" });
+  }
 
   broadcastEditorMutation(note, {
     type: "mutation",
@@ -1314,7 +1454,18 @@ type AnyServerMessage =
   | { type: "refresh"; noteId: string; shareId: string; message?: string; reason?: string }
   | { type: "note-created"; note: NoteMetaBroadcast }
   | { type: "note-meta-updated"; note: NoteMetaBroadcast }
-  | { type: "note-deleted"; id: string };
+  | { type: "note-deleted"; id: string }
+  | { type: "revision-created"; noteId: string; shareId: string; revision: RevisionMetaBroadcast };
+
+type RevisionMetaBroadcast = {
+  id: string;
+  ts: string;
+  author_name: string;
+  author_kind: AuthorKind;
+  reason: string | null;
+  title: string;
+  body_size: number;
+};
 
 function sendServerMessage(ws: WebSocket, message: AnyServerMessage) {
   if (ws.readyState === 1) {
@@ -1433,6 +1584,34 @@ function broadcastThreadsUpdated(note: NoteRecord) {
   }
 }
 
+function broadcastRevisionCreated(note: NoteRecord, row: RevisionRow) {
+  const message: AnyServerMessage = {
+    type: "revision-created",
+    noteId: note.id,
+    shareId: note.shareId,
+    revision: {
+      id: row.id,
+      ts: row.ts,
+      author_name: row.author_name,
+      author_kind: row.author_kind,
+      reason: row.reason,
+      title: row.title,
+      body_size: row.body_size,
+    },
+  };
+  // Owner-only fan-out: globals get every revision (for cross-tab toasts);
+  // owner-editors of this same note get it for live panel updates.
+  for (const conn of clients) {
+    if (conn.kind === "global") {
+      sendServerMessage(conn.ws, message);
+      continue;
+    }
+    if (conn.kind === "editor" && conn.noteId === note.id) {
+      sendServerMessage(conn.ws, message);
+    }
+  }
+}
+
 function broadcastPresence(sender: ClientConn, message: ClientPresenceMessage) {
   const outgoing: ServerPresenceMessage = {
     type: "presence",
@@ -1472,14 +1651,9 @@ function ensureDirectories() {
   fs.mkdirSync(notesDir, { recursive: true });
 }
 
-type Destination = {
-  id: string;
-  label: string;
-  kind: "file";
-  path: string;
-  filenameTemplate?: string;
-  frontmatter?: boolean;
-};
+type Destination =
+  | { id: string; label: string; kind: "file"; path: string; filenameTemplate?: string; frontmatter?: boolean }
+  | { id: string; label: string; kind: "http"; url: string; apiKey: string };
 
 const DEFAULT_DESTINATIONS: Destination[] = [
   {
@@ -1505,8 +1679,7 @@ function loadDestinations(): Destination[] {
         !!d && typeof d === "object" &&
         typeof (d as Destination).id === "string" &&
         typeof (d as Destination).label === "string" &&
-        (d as Destination).kind === "file" &&
-        typeof (d as Destination).path === "string"
+        ((d as Destination).kind === "file" || (d as Destination).kind === "http")
       );
     }
   } catch (err) {
@@ -1539,28 +1712,51 @@ function renderFilename(template: string, note: NoteRecord): string {
     .replace(/\{id\}/g, note.id);
 }
 
-function saveNoteToDestination(note: NoteRecord, dest: Destination): string {
-  if (dest.kind !== "file") {
-    throw new Error(`Unsupported destination kind: ${(dest as { kind: string }).kind}`);
+async function saveNoteToDestination(note: NoteRecord, dest: Destination): Promise<{ path: string; url?: string }> {
+  if (dest.kind === "file") {
+    const dir = expandHome(dest.path);
+    fs.mkdirSync(dir, { recursive: true });
+    const filename = renderFilename(dest.filenameTemplate || "{date}-{slug}.md", note);
+    const outputPath = path.join(dir, filename);
+    const body = dest.frontmatter
+      ? [
+          "---",
+          `title: ${JSON.stringify(note.title || "untitled")}`,
+          "source: jot",
+          `noteId: ${note.id}`,
+          `savedAt: ${nowIso()}`,
+          "---",
+          "",
+          note.markdown,
+        ].join("\n")
+      : note.markdown;
+    fs.writeFileSync(outputPath, body, "utf8");
+    return { path: outputPath };
   }
-  const dir = expandHome(dest.path);
-  fs.mkdirSync(dir, { recursive: true });
-  const filename = renderFilename(dest.filenameTemplate || "{date}-{slug}.md", note);
-  const outputPath = path.join(dir, filename);
-  const body = dest.frontmatter
-    ? [
-        "---",
-        `title: ${JSON.stringify(note.title || "untitled")}`,
-        "source: jot",
-        `noteId: ${note.id}`,
-        `savedAt: ${nowIso()}`,
-        "---",
-        "",
-        note.markdown,
-      ].join("\n")
-    : note.markdown;
-  fs.writeFileSync(outputPath, body, "utf8");
-  return outputPath;
+  if (dest.kind === "http") {
+    const html = renderMarkdown(note.markdown);
+    const wrapped = `<div style="max-width: 720px; margin: 0 auto; padding: 2rem; font-family: system-ui, -apple-system, sans-serif; line-height: 1.6;">${html}</div>`;
+    const slug = slugify(note.title || "untitled");
+    const response = await fetch(`${dest.url}/${slug}`, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Bearer ${dest.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ html: wrapped }),
+    });
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      throw new Error(`htmlpub error ${response.status}: ${errBody}`);
+    }
+    const result = await response.json() as { id?: string; url?: string; slug?: string };
+    const origin = new URL(dest.url).origin;
+    const absoluteUrl = result.url
+      ? new URL(result.url, origin).toString()
+      : `${origin}/edit/${result.id ?? slug}`;
+    return { path: absoluteUrl, url: absoluteUrl };
+  }
+  throw new Error(`Unsupported destination kind: ${(dest as { kind: string }).kind}`);
 }
 
 function loadNotesIntoMemory() {
@@ -1613,6 +1809,14 @@ function loadNotesIntoMemory() {
   }
 }
 
+function seedImportRevisions() {
+  for (const note of notes.values()) {
+    if (countRevisionsForNote(note.id) === 0) {
+      importInitialRevision(note.id, note.title, note.markdown, note.createdAt || nowIso(), "Owner");
+    }
+  }
+}
+
 function noteMarkdownPath(id: string) {
   return path.join(notesDir, `${id}.md`);
 }
@@ -1633,7 +1837,7 @@ function writeJson(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function createNote() {
+function createNote(opts: PersistOpts = {}) {
   const timestamp = nowIso();
   const id = createShortId();
   const note: NoteRecord = {
@@ -1650,11 +1854,22 @@ function createNote() {
   };
 
   notes.set(id, note);
-  persistNote(note);
+  persistNote(note, opts);
   return note;
 }
 
-function persistNote(note: NoteRecord, broadcastUpdate = true) {
+type PersistOpts = {
+  broadcast?: boolean;
+  author?: string;
+  authorKind?: AuthorKind;
+  reason?: string;
+};
+
+function persistNote(note: NoteRecord, optsOrLegacy: PersistOpts | boolean = true) {
+  const opts: PersistOpts =
+    typeof optsOrLegacy === "boolean" ? { broadcast: optsOrLegacy } : optsOrLegacy;
+  const broadcastUpdate = opts.broadcast !== false;
+
   note.markdown = collabToMarkdown(note.collab);
 
   const meta: NoteMetaFile = {
@@ -1670,6 +1885,17 @@ function persistNote(note: NoteRecord, broadcastUpdate = true) {
 
   fs.writeFileSync(noteMarkdownPath(note.id), note.markdown, "utf8");
   writeJson(noteMetaPath(note.id), meta);
+
+  const recordOpts: RecordOpts = {
+    author: opts.author,
+    authorKind: opts.authorKind,
+    reason: opts.reason,
+  };
+  const result = maybeRecordRevision(note.id, note.title, note.markdown, recordOpts);
+  if (result?.created) {
+    broadcastRevisionCreated(note, result.row);
+  }
+
   if (broadcastUpdate) {
     broadcastNoteUpdate(note);
   }
@@ -2169,6 +2395,17 @@ function getApiKeyLabel(key: string): string | null {
   }
 
   return null;
+}
+
+function resolveAuthorFromReq(req: Request): { author: string; authorKind: AuthorKind } {
+  const bearer = getBearerToken(req);
+  if (bearer) {
+    const label = getApiKeyLabel(bearer);
+    if (label) {
+      return { author: label, authorKind: "api-key" };
+    }
+  }
+  return { author: "Owner", authorKind: "owner" };
 }
 
 function createApiKey(label: string) {

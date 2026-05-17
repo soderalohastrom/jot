@@ -359,6 +359,13 @@
         if (!row) return;
         row.classList.add("note-row--leaving");
         setTimeout(() => row.remove(), 280);
+      } else if (msg.type === "revision-created" && msg.revision) {
+        const author = msg.revision.author_name || "someone";
+        const title = msg.revision.title || "untitled";
+        showToast(`${author} saved a revision in '${title}'`, {
+          onClick: () => { window.location.href = `/notes/${msg.noteId}`; },
+          duration: 5000,
+        });
       }
     });
   }
@@ -588,6 +595,318 @@ if (resolvedButton) {
       });
     }
 
+    // ---- Files panel (left slide-out) ----
+    // Lists every note for in-place navigation without going back to /. Click
+    // a row → window.location.href to that note. Owner-only (the API is gated).
+    const filesPanel = document.getElementById("filesPanel");
+    const filesList = document.getElementById("filesList");
+    const filesSearchInput = document.getElementById("filesSearchInput");
+    const filesPanelButton = document.getElementById("filesPanelButton");
+    const filesCloseButton = document.getElementById("filesCloseButton");
+
+    const filesPanelApi = (function setupFilesPanel() {
+      if (!filesPanel || !filesList || !workspace || isPublic) {
+        return { onCrossNoteEvent() {} };
+      }
+
+      let notesCache = [];
+      let loaded = false;
+      let inflight = null;
+      let searchTimer = null;
+      let lastQuery = "";
+
+      function applyOpen(open) {
+        workspace.classList.toggle("workspace--with-files", !!open);
+      }
+
+      function renderRow(n) {
+        const isCurrent = n.id === noteId;
+        return `
+          <button type="button" class="file-row${isCurrent ? " file-row--current" : ""}" data-note-id="${escapeHtml(n.id)}">
+            <span class="file-row-title">${escapeHtml(n.title || "untitled")}</span>
+            <span class="file-row-snippet">${escapeHtml(n.snippet || "Empty note")}</span>
+            <span class="file-row-meta">${escapeHtml(formatRelativeTime(n.updatedAt))}</span>
+          </button>
+        `;
+      }
+
+      function renderList() {
+        if (!notesCache.length) {
+          filesList.innerHTML = `<div class="files-empty">${lastQuery ? "No notes match." : "No notes yet."}</div>`;
+          return;
+        }
+        filesList.innerHTML = notesCache.map(renderRow).join("");
+      }
+
+      async function fetchList(query = "") {
+        lastQuery = query;
+        if (inflight) return inflight;
+        inflight = api(`/api/notes?q=${encodeURIComponent(query)}`).then((payload) => {
+          notesCache = Array.isArray(payload?.notes) ? payload.notes : [];
+          loaded = true;
+          renderList();
+        }).catch((err) => {
+          console.error(err);
+          filesList.innerHTML = `<div class="files-empty">Failed to load notes.</div>`;
+        }).finally(() => { inflight = null; });
+        return inflight;
+      }
+
+      filesList.addEventListener("click", (event) => {
+        const row = event.target.closest("[data-note-id]");
+        if (!row) return;
+        const id = row.dataset.noteId;
+        if (!id || id === noteId) return;
+        window.location.href = `/notes/${id}`;
+      });
+
+      if (filesSearchInput) {
+        filesSearchInput.addEventListener("input", () => {
+          clearTimeout(searchTimer);
+          searchTimer = setTimeout(() => fetchList(filesSearchInput.value), 160);
+        });
+      }
+      if (filesCloseButton) {
+        filesCloseButton.addEventListener("click", () => {
+          localStorage.setItem("jot.filesPanel", "0");
+          applyOpen(false);
+        });
+      }
+      if (filesPanelButton) {
+        filesPanelButton.addEventListener("click", () => {
+          const next = !(localStorage.getItem("jot.filesPanel") === "1");
+          localStorage.setItem("jot.filesPanel", next ? "1" : "0");
+          applyOpen(next);
+          if (next && !loaded) fetchList("");
+          if (next && filesSearchInput) {
+            // Tiny UX nicety: focus search on open so typing filters immediately.
+            setTimeout(() => filesSearchInput.focus(), 50);
+          }
+        });
+      }
+
+      const initiallyOpen = localStorage.getItem("jot.filesPanel") === "1";
+      applyOpen(initiallyOpen);
+      if (initiallyOpen) fetchList("");
+
+      return {
+        // Forwarded from handleCrossNoteEvent so the list stays live across
+        // peer activity. We re-fetch on note-created/deleted (cheap) rather
+        // than splicing in-place — the row count is small and the search
+        // result ordering depends on updatedAt anyway.
+        onCrossNoteEvent(msg) {
+          if (!loaded) return;
+          if (
+            msg.type === "note-created" ||
+            msg.type === "note-deleted" ||
+            msg.type === "note-meta-updated"
+          ) {
+            fetchList(lastQuery);
+          } else if (msg.type === "revision-created") {
+            // Bump updatedAt for the affected row without a refetch — the
+            // sort might shift, but a small fix keeps it perceptually live.
+            const row = filesList.querySelector(`[data-note-id="${CSS.escape(msg.noteId)}"]`);
+            if (row) {
+              const meta = row.querySelector(".file-row-meta");
+              if (meta) meta.textContent = formatRelativeTime(new Date().toISOString());
+            }
+          }
+        },
+      };
+    })();
+
+    // ---- Revisions / History panel ----
+    // Toggleable right-side panel listing prior versions of the current
+    // note. Lazy-loads on first open. Live-updates via the global WS
+    // `revision-created` event. Owner-editor only — not wired into public
+    // editor or read-only share views (the API is requireOwnerApi-gated).
+    const revisionsPanel = document.getElementById("revisionsPanel");
+    const revisionsList = document.getElementById("revisionsList");
+    const revisionsDiff = document.getElementById("revisionsDiff");
+    const historyButton = document.getElementById("historyButton");
+    const revisionsCloseButton = document.getElementById("revisionsCloseButton");
+
+    const revisionsPanelApi = (function setupRevisionsPanel() {
+      if (!revisionsPanel || !revisionsList || !workspace || isPublic) {
+        return { onRevisionCreated() {} };
+      }
+
+      let revisions = [];
+      let loaded = false;
+      let inflight = null;
+      let activeRevId = null;
+
+      function applyOpen(open) {
+        workspace.classList.toggle("workspace--with-revisions", !!open);
+      }
+
+      function fmtTs(iso) {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return iso;
+        const now = Date.now();
+        const diff = Math.round((now - d.getTime()) / 1000);
+        if (diff < 60) return `${diff}s ago`;
+        if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
+        return d.toLocaleString();
+      }
+
+      function fmtBytes(n) {
+        if (n < 1024) return `${n}B`;
+        return `${(n / 1024).toFixed(1)}KB`;
+      }
+
+      function reasonBadge(reason) {
+        if (!reason) return "";
+        const short = String(reason).split(":")[0];
+        const map = {
+          "import": "v0",
+          "create": "new",
+          "cli-update": "cli",
+          "api-update": "edit",
+          "api-edit": "edit",
+          "crdt-flush": "live",
+          "thread-change": "comment",
+          "rename": "rename",
+          "share-edit": "share",
+          "share-access-change": "share",
+          "restore": "restored",
+        };
+        const label = map[short] || short;
+        return `<span class="revision-row-badge revision-row-badge--${escapeHtml(short)}">${escapeHtml(label)}</span>`;
+      }
+
+      function renderList() {
+        if (!revisions.length) {
+          revisionsList.innerHTML = `<div class="revisions-empty">No history yet.</div>`;
+          return;
+        }
+        revisionsList.innerHTML = revisions.map((r) => `
+          <button type="button" class="revision-row${r.id === activeRevId ? " revision-row--active" : ""}" data-rev-id="${escapeHtml(r.id)}">
+            <span class="revision-row-top">
+              <span class="revision-row-author">${escapeHtml(r.author_name || "?")}</span>
+              ${reasonBadge(r.reason)}
+            </span>
+            <span class="revision-row-bottom">
+              <span class="revision-row-when">${escapeHtml(fmtTs(r.ts))}</span>
+              <span class="revision-row-size">${fmtBytes(r.body_size || 0)}</span>
+            </span>
+          </button>
+        `).join("");
+      }
+
+      async function fetchList() {
+        if (inflight) return inflight;
+        inflight = api(`/api/notes/${noteId}/revisions`).then((payload) => {
+          revisions = Array.isArray(payload?.revisions) ? payload.revisions : [];
+          loaded = true;
+          renderList();
+        }).catch((err) => {
+          console.error(err);
+          revisionsList.innerHTML = `<div class="revisions-empty">Failed to load history.</div>`;
+        }).finally(() => { inflight = null; });
+        return inflight;
+      }
+
+      async function showRevisionDiff(revId) {
+        activeRevId = revId;
+        renderList();
+        revisionsDiff.classList.remove("hidden");
+        revisionsDiff.innerHTML = `<div class="revisions-diff-loading">Loading…</div>`;
+        try {
+          const payload = await api(`/api/notes/${noteId}/revisions/${encodeURIComponent(revId)}`);
+          const segs = Array.isArray(payload?.diff) ? payload.diff : [];
+          const lines = [];
+          for (const part of segs) {
+            const cls = part.added ? "diff-add" : part.removed ? "diff-del" : "diff-context";
+            const sign = part.added ? "+" : part.removed ? "-" : " ";
+            const text = String(part.value || "").replace(/\n$/, "");
+            for (const line of text.split("\n")) {
+              lines.push(`<span class="${cls}">${escapeHtml(sign + line)}</span>`);
+            }
+          }
+          const r = payload.revision;
+          revisionsDiff.innerHTML = `
+            <div class="revisions-diff-meta">
+              <strong>${escapeHtml(r.author_name || "?")}</strong>
+              <span class="revisions-diff-ts">${escapeHtml(fmtTs(r.ts))}</span>
+              <span class="revisions-diff-id">${escapeHtml(r.id)}</span>
+            </div>
+            <pre class="revisions-diff-pre">${lines.join("\n")}</pre>
+            <div class="revisions-diff-actions">
+              <jot-button variant="ghost" size="sm" id="revisionsDiffCloseBtn">Close</jot-button>
+              <jot-button variant="primary" size="sm" id="revisionsDiffRestoreBtn">Restore this version</jot-button>
+            </div>
+          `;
+          const closeBtn = document.getElementById("revisionsDiffCloseBtn");
+          const restoreBtn = document.getElementById("revisionsDiffRestoreBtn");
+          if (closeBtn) closeBtn.addEventListener("click", () => {
+            activeRevId = null;
+            revisionsDiff.classList.add("hidden");
+            renderList();
+          });
+          if (restoreBtn) restoreBtn.addEventListener("click", () => doRestore(r.id, r.author_name));
+        } catch (err) {
+          console.error(err);
+          revisionsDiff.innerHTML = `<div class="revisions-diff-loading">Failed to load revision.</div>`;
+        }
+      }
+
+      async function doRestore(revId, authorLabel) {
+        const ok = window.confirm(`Restore note to the version by ${authorLabel || "?"}?\n\nThis is non-destructive — a new revision will be created with the restored content.`);
+        if (!ok) return;
+        try {
+          await api(`/api/notes/${noteId}/revisions/${encodeURIComponent(revId)}/restore`, { method: "POST" });
+          showToast(`Restored from ${revId}`, { duration: 4000 });
+          activeRevId = null;
+          revisionsDiff.classList.add("hidden");
+          // The restore endpoint broadcasts editorHello + revision-created;
+          // the panel will refresh from those events. As a belt-and-braces
+          // backup, also fetch directly.
+          fetchList();
+        } catch (err) {
+          console.error(err);
+          showToast(`Restore failed: ${err.message || err}`, { duration: 6000 });
+        }
+      }
+
+      revisionsList.addEventListener("click", (event) => {
+        const row = event.target.closest("[data-rev-id]");
+        if (!row) return;
+        showRevisionDiff(row.dataset.revId);
+      });
+
+      if (revisionsCloseButton) {
+        revisionsCloseButton.addEventListener("click", () => {
+          localStorage.setItem("jot.revisionsPanel", "0");
+          applyOpen(false);
+        });
+      }
+      if (historyButton) {
+        historyButton.addEventListener("click", () => {
+          const next = !(localStorage.getItem("jot.revisionsPanel") === "1");
+          localStorage.setItem("jot.revisionsPanel", next ? "1" : "0");
+          applyOpen(next);
+          if (next && !loaded) {
+            fetchList();
+          }
+        });
+      }
+
+      const initiallyOpen = localStorage.getItem("jot.revisionsPanel") === "1";
+      applyOpen(initiallyOpen);
+      if (initiallyOpen) fetchList();
+
+      return {
+        onRevisionCreated(payload) {
+          if (!payload || payload.noteId !== noteId) return;
+          // Refetch to pick up coalesce updates correctly. Cheap query;
+          // SQLite indexed by (note_id, ts) so this is sub-ms locally.
+          if (loaded) fetchList();
+        },
+      };
+    })();
+
     if (previewCloseButton) {
       previewCloseButton.addEventListener("click", () => {
         const stage = document.getElementById("previewStage");
@@ -685,6 +1004,7 @@ if (resolvedButton) {
     });
 
     function handleCrossNoteEvent(msg) {
+      filesPanelApi.onCrossNoteEvent(msg);
       if (msg.type === "note-created" && msg.note) {
         if (state.note && msg.note.id === state.note.id) return;
         if (localStorage.getItem("jot.autoOpenNewNotes") === "1" && !isUserTyping()) {
@@ -699,6 +1019,19 @@ if (resolvedButton) {
           showToast("⚠︎ This note was deleted", {
             onClick: () => { window.location.href = `/`; },
             duration: 8000,
+          });
+        }
+      } else if (msg.type === "revision-created" && msg.revision) {
+        // Live-refresh the panel if it's open + showing this note.
+        revisionsPanelApi.onRevisionCreated(msg);
+        // Cross-note toast: only when the saved revision is for some OTHER
+        // note (otherwise the user's own typing toasts itself, noisy).
+        if (!state.note || msg.noteId !== state.note.id) {
+          const author = msg.revision.author_name || "someone";
+          const title = msg.revision.title || "untitled";
+          showToast(`${author} saved a revision in '${title}'`, {
+            onClick: () => { window.location.href = `/notes/${msg.noteId}`; },
+            duration: 5000,
           });
         }
       }
@@ -752,7 +1085,7 @@ if (resolvedButton) {
             reloadFromServer(refsArg, publicMode);
             return;
           }
-          if (msg.type === "note-created" || msg.type === "note-deleted" || msg.type === "note-meta-updated") {
+          if (msg.type === "note-created" || msg.type === "note-deleted" || msg.type === "note-meta-updated" || msg.type === "revision-created") {
             handleCrossNoteEvent(msg);
             return;
           }
@@ -887,11 +1220,13 @@ if (resolvedButton) {
       <div class="app-root">
         <header class="topbar">
           <div class="topbar-left">
+            <jot-icon-button icon="sidebar" label="Files panel" id="filesPanelButton"></jot-icon-button>
             <jot-icon-button icon="back" label="Back to notes" id="notesButton"></jot-icon-button>
             <input id="titleInput" class="title-input" type="text" spellcheck="false" value="untitled" />
             <span class="status-text" id="saveStatus"></span>
           </div>
           <div class="topbar-right">
+            <jot-icon-button icon="history" label="Revisions (history)" id="historyButton"></jot-icon-button>
             <jot-icon-button icon="zen" label="Zen mode (hide raw)" id="zenButton"></jot-icon-button>
             <jot-icon-button icon="preview" label="Preview" id="previewFab"></jot-icon-button>
             <div class="save-popover-wrap" id="savePopoverWrap">
@@ -906,6 +1241,16 @@ if (resolvedButton) {
           </div>
         </header>
         <main class="workspace">
+          <aside class="files-panel" id="filesPanel" aria-label="Notes">
+            <header class="files-panel-header">
+              <span class="files-panel-title">Notes</span>
+              <jot-icon-button icon="close" label="Close files" id="filesCloseButton"></jot-icon-button>
+            </header>
+            <div class="files-panel-search">
+              <input id="filesSearchInput" type="search" placeholder="Search notes..." spellcheck="false" />
+            </div>
+            <div class="files-panel-body" id="filesList"></div>
+          </aside>
           <section class="editor-pane">
             <div id="disconnectedBanner" class="editor-disconnected hidden">Disconnected. Reconnecting...</div>
             <textarea id="editorTextarea" class="editor-textarea" spellcheck="false"></textarea>
@@ -926,6 +1271,14 @@ if (resolvedButton) {
               </div>
             </div>
           </section>
+          <aside class="revisions-panel" id="revisionsPanel" aria-label="Revisions">
+            <header class="revisions-panel-header">
+              <span class="revisions-panel-title">History</span>
+              <jot-icon-button icon="close" label="Close history" id="revisionsCloseButton"></jot-icon-button>
+            </header>
+            <div class="revisions-panel-body" id="revisionsList"></div>
+            <div class="revisions-diff hidden" id="revisionsDiff" aria-live="polite"></div>
+          </aside>
         </main>
         <div class="modal-backdrop hidden" id="modalBackdrop"></div>
       </div>
@@ -1126,7 +1479,11 @@ if (resolvedButton) {
       try {
         const result = await api(`/api/notes/${state.note.id}/save-to/${encodeURIComponent(destId)}`, { method: "POST" });
         row.classList.add("is-saved");
-        if (status) status.textContent = `✓ ${result.path.split("/").slice(-2).join("/")}`;
+        if (result.url && status) {
+          status.innerHTML = `<a href="${result.url}" target="_blank" rel="noopener">✓ published</a>`;
+        } else if (status) {
+          status.textContent = `✓ ${result.path.split("/").slice(-2).join("/")}`;
+        }
         setTimeout(() => {
           row.classList.remove("is-saved");
           if (status) status.textContent = "";
