@@ -385,7 +385,6 @@
     const topbarTitle = document.getElementById("topbarTitle");
     const titleInput = document.getElementById("titleInput");
     const editorTextarea = document.getElementById("editorTextarea");
-    const shareButton = document.getElementById("shareButton");
     const notesButton = document.getElementById("notesButton");
     const newNoteButton = document.getElementById("newNoteButton");
     const resolvedButton = document.getElementById("resolvedButton");
@@ -408,7 +407,6 @@
       topbarTitle,
       titleInput,
       editorTextarea,
-      shareButton,
       notesButton,
       newNoteButton,
       resolvedButton,
@@ -434,10 +432,28 @@
       });
     }
 
-    if (shareButton) {
-      shareButton.addEventListener("click", (e) => {
-        e.stopPropagation();
-        toggleSharePopover(refs);
+    const shareAccessSelect = document.getElementById("shareAccessSelect");
+    if (shareAccessSelect) {
+      shareAccessSelect.addEventListener("change", async () => {
+        if (!state.note) return;
+        const val = shareAccessSelect.value;
+        state.note.shareAccess = val;
+        updateShareInline();
+        try {
+          await api(`/api/notes/${state.note.id}`, { method: "PUT", body: { shareAccess: val } });
+        } catch {
+          /* keep optimistic UI; a reload/WS event will reconcile */
+        }
+      });
+    }
+    const shareCopyBtn = document.getElementById("shareCopyBtn");
+    if (shareCopyBtn) {
+      shareCopyBtn.addEventListener("click", async () => {
+        if (!state.note || (state.note.shareAccess || "none") === "none") return;
+        try {
+          await navigator.clipboard.writeText(`${location.origin}/s/${state.note.shareId || ""}`);
+          flashCopyIcon(shareCopyBtn);
+        } catch {}
       });
     }
 
@@ -1198,7 +1214,30 @@ if (resolvedButton) {
       }
       updateResolvedButton(refsArg.resolvedButton);
       updateCommentsButton(refsArg.commentsButton);
+      updateShareInline();
       syncThreadLayout(refsArg);
+    }
+
+    function updateShareInline() {
+      const select = document.getElementById("shareAccessSelect");
+      if (!select || !state.note) return;
+      const access = state.note.shareAccess || "none";
+      const shared = access !== "none";
+      const url = `${location.origin}/s/${state.note.shareId || ""}`;
+      select.value = access;
+      const link = document.getElementById("shareLink");
+      const urlField = document.getElementById("shareUrlField");
+      const openLink = document.getElementById("shareOpenLink");
+      if (link) link.classList.toggle("hidden", !shared);
+      if (urlField) urlField.value = shared ? url : "";
+      if (openLink) openLink.setAttribute("href", shared ? url : "#");
+    }
+
+    function flashCopyIcon(el) {
+      const btn = el.querySelector("button") || el;
+      const orig = btn.innerHTML;
+      btn.innerHTML = (window.__ICONS__ && window.__ICONS__.check) || orig;
+      setTimeout(() => { btn.innerHTML = orig; }, 1200);
     }
 
     function scheduleRender(refsArg) {
@@ -1233,9 +1272,18 @@ if (resolvedButton) {
               <jot-icon-button icon="save" label="Save to…" id="saveButton"></jot-icon-button>
               <div class="save-popover hidden" id="savePopover"></div>
             </div>
-            <div class="share-popover-wrap" id="sharePopoverWrap">
-              <jot-icon-button icon="share" label="Share" id="shareButton"></jot-icon-button>
-              <div class="share-popover hidden" id="sharePopover"></div>
+            <div class="share-inline" id="shareInline">
+              <select id="shareAccessSelect" class="share-mode-select" title="Share access" aria-label="Share access">
+                <option value="none">Private</option>
+                <option value="view">View</option>
+                <option value="comment">Comment</option>
+                <option value="edit">Edit</option>
+              </select>
+              <div class="share-link hidden" id="shareLink">
+                <input id="shareUrlField" class="share-url-field" type="text" readonly tabindex="-1" />
+                <jot-icon-button icon="copy" label="Copy share link" id="shareCopyBtn"></jot-icon-button>
+                <a id="shareOpenLink" class="jot-btn-icon jot-btn-icon--md share-open-link" target="_blank" rel="noopener" aria-label="Open shared page in new tab" title="Open shared page in new tab" href="#">${window.__ICONS__?.external || ""}</a>
+              </div>
             </div>
             <button type="button" class="jot-btn-icon jot-btn-icon--md theme-toggle" aria-label="Toggle theme">${themeIcon(document.documentElement.getAttribute("data-theme") || "dark")}</button>
           </div>
@@ -1380,45 +1428,6 @@ if (resolvedButton) {
         }, 1500);
       }
     }
-  }
-
-  function toggleSharePopover(refs) {
-    const popover = document.getElementById("sharePopover");
-    if (!popover) return;
-    if (!popover.classList.contains("hidden")) { popover.classList.add("hidden"); return; }
-    const access = state.note?.shareAccess || "none";
-    const shareUrl = `${location.origin}/s/${state.note?.shareId || ""}`;
-    popover.innerHTML = `
-      <div class="share-popover-row">
-        <select id="shareAccessSelect">
-          <option value="none" ${access === "none" ? "selected" : ""}>Not shared</option>
-          <option value="view" ${access === "view" ? "selected" : ""}>View only</option>
-          <option value="comment" ${access === "comment" ? "selected" : ""}>View & comment</option>
-          <option value="edit" ${access === "edit" ? "selected" : ""}>Edit & comment</option>
-        </select>
-        <jot-button variant="default" size="sm" id="shareCopyBtn" class="${access === "none" ? "share-copy-disabled" : ""}" ${access === "none" ? "disabled" : ""}>copy link</jot-button>
-      </div>
-    `;
-    popover.classList.remove("hidden");
-    const select = popover.querySelector("#shareAccessSelect");
-    const copyBtn = popover.querySelector("#shareCopyBtn");
-    select.addEventListener("change", async () => {
-      if (!state.note) return;
-      const val = select.value;
-      state.note.shareAccess = val;
-      await api(`/api/notes/${state.note.id}`, { method: "PUT", body: { shareAccess: val } });
-      if (val === "none") {
-        copyBtn.disabled = true; copyBtn.classList.add("share-copy-disabled");
-      } else {
-        copyBtn.disabled = false; copyBtn.classList.remove("share-copy-disabled");
-      }
-    });
-    copyBtn.addEventListener("click", async () => {
-      if (select.value === "none") return;
-      try { await navigator.clipboard.writeText(shareUrl); setButtonLabel(copyBtn, "copied!"); setTimeout(() => { setButtonLabel(copyBtn, "copy link"); }, 1500); } catch {}
-    });
-    const closeHandler = (e) => { if (!popover.contains(e.target) && e.target.id !== "shareButton") { popover.classList.add("hidden"); document.removeEventListener("click", closeHandler); } };
-    setTimeout(() => document.addEventListener("click", closeHandler), 0);
   }
 
   async function toggleSavePopover(_refs) {

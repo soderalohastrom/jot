@@ -356,23 +356,22 @@ input:focus, textarea:focus { border-color: var(--muted); }
 /* --- Textarea mirror (hidden, for caret position measurement) --- */
 .textarea-mirror { position: absolute !important; visibility: hidden !important; overflow: hidden !important; pointer-events: none !important; z-index: -1; top: 0; left: 0; }
 
-/* --- Share popover --- */
-.share-popover-wrap { position: relative; display: inline-flex; }
-.share-popover {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 100;
-  background: var(--modal-bg); border: 1px solid var(--modal-border);
-  border-radius: 10px; padding: 0.75rem; min-width: 300px;
-  box-shadow: var(--shadow);
-}
-.share-popover-row { display: flex; align-items: center; gap: 0.5rem; }
-.share-popover-row select {
-  flex: 1; padding: 0.4rem 0.5rem; border-radius: 6px;
+/* --- Inline share control (owner topbar) --- */
+.share-inline { display: inline-flex; align-items: center; gap: 0.35rem; }
+.share-mode-select {
+  padding: 0.3rem 0.45rem; border-radius: 6px;
   border: 1px solid var(--line); background: var(--input-bg); color: var(--text);
-  font: inherit; font-size: 0.85rem;
+  font: inherit; font-size: 0.8rem; cursor: pointer;
 }
-.share-popover-row button { padding: 0.4rem 0.7rem; font-size: 0.82rem; border-radius: 6px; white-space: nowrap; }
-.share-copy-disabled { opacity: 0.35; cursor: default; }
-.share-copy-disabled:hover { background: transparent; }
+.share-mode-select:focus { outline: none; border-color: var(--accent, var(--text)); }
+.share-link { display: inline-flex; align-items: center; gap: 0.15rem; }
+.share-url-field {
+  width: 170px; padding: 0.3rem 0.45rem; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--input-bg);
+  color: var(--muted); font: inherit; font-size: 0.75rem; cursor: text;
+}
+.share-url-field:focus { outline: none; border-color: var(--accent, var(--text)); color: var(--text); }
+.share-open-link { text-decoration: none; }
 
 /* --- Save-to popover --- */
 .save-popover-wrap { position: relative; display: inline-flex; }
