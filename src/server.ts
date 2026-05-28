@@ -1864,7 +1864,9 @@ function createNote(opts: PersistOpts = {}) {
     id,
     title: "untitled",
     shareId: createShortId(14),
-    shareAccess: "none",
+    // Resting posture: new notes are live + commentable, not private. Flip to
+    // "none" to make sharing opt-in again.
+    shareAccess: "comment",
     createdAt: timestamp,
     updatedAt: timestamp,
     markdown: "",

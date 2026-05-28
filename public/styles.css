@@ -364,6 +364,8 @@ input:focus, textarea:focus { border-color: var(--muted); }
   font: inherit; font-size: 0.8rem; cursor: pointer;
 }
 .share-mode-select:focus { outline: none; border-color: var(--accent, var(--text)); }
+.share-mode-select.is-shared { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.share-mode-select.is-shared[data-access="edit"] { border-color: var(--danger); color: var(--danger); background: transparent; }
 .share-link { display: inline-flex; align-items: center; gap: 0.15rem; }
 .share-url-field {
   width: 170px; padding: 0.3rem 0.45rem; border-radius: 6px;

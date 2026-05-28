@@ -1225,6 +1225,8 @@ if (resolvedButton) {
       const shared = access !== "none";
       const url = `${location.origin}/s/${state.note.shareId || ""}`;
       select.value = access;
+      select.dataset.access = access;
+      select.classList.toggle("is-shared", shared);
       const link = document.getElementById("shareLink");
       const urlField = document.getElementById("shareUrlField");
       const openLink = document.getElementById("shareOpenLink");
