@@ -604,12 +604,18 @@ input:focus, textarea:focus { border-color: var(--muted); }
   min-height: 0;
 }
 .workspace--zen .preview-content {
-  max-width: 880px;
+  max-width: min(1400px, 100%);
   padding-left: 2rem;
   padding-right: 2rem;
   margin: 0 auto;
 }
 .workspace--zen .preview-close-btn { display: none !important; }
+/* Zen hides the editor pane, but the side-panel grid templates still reserve
+   its track, leaving an empty column. Drop that track so the preview fills the
+   gap. Higher specificity (2-3 classes) beats the single-class panel rules. */
+.workspace--zen.workspace--with-files { grid-template-columns: 280px 1fr !important; }
+.workspace--zen.workspace--with-revisions { grid-template-columns: 1fr 320px !important; }
+.workspace--zen.workspace--with-files.workspace--with-revisions { grid-template-columns: 280px 1fr 320px !important; }
 
 /* --- Files panel (left slide-out) --- */
 /* Hidden by default; revealed when `.workspace--with-files` is on the
