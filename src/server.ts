@@ -82,6 +82,7 @@ type NoteMetaFile = {
   createdAt: string;
   updatedAt: string;
   threads: CommentThread[];
+  project?: string;
   collab?: SavedCollabState;
   collabState?: SavedCollabState;
 };
@@ -94,6 +95,7 @@ type NoteRecord = {
   createdAt: string;
   updatedAt: string;
   threads: CommentThread[];
+  project: string;
   markdown: string;
   collab: CollabState;
   clientAcks: Map<string, number>;
@@ -104,8 +106,27 @@ type NoteSummary = {
   title: string;
   updatedAt: string;
   shareId: string;
+  project: string;
   snippet: string;
 };
+
+// A project is just a flat, slug-like label stored on each note. Empty string
+// means "unfiled" (the root bucket). normalizeProject keeps the label
+// addressable from a URL / CLI while staying readable: lowercased, spaces →
+// hyphens, only [a-z0-9-_/], collapsed dashes. We keep "/" legal so a future
+// nested mode is a non-breaking change, but the UI treats the whole string as
+// one flat folder name today.
+function normalizeProject(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\-_/\s]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-/]+|[-/]+$/g, "")
+    .slice(0, 60);
+}
 
 type DeviceToken = {
   id: string;
@@ -604,15 +625,106 @@ app.delete("/api/notes/:id", requireOwnerApi, (req, res) => {
 
 app.get("/api/notes", requireOwnerApi, (req, res) => {
   const query = String(req.query.q || "");
-  const results = searchNotes(query);
+  const hasProjectFilter = Object.prototype.hasOwnProperty.call(req.query, "project");
+  const projectFilter = hasProjectFilter ? normalizeProject(req.query.project) : null;
+  let results = searchNotes(query);
+  // ?project= (empty) → unfiled bucket; ?project=mise → that folder; absent → all.
+  if (projectFilter !== null) {
+    results = results.filter((n) => (n.project || "") === projectFilter);
+  }
   res.json({ ok: true, notes: results });
 });
 
 app.post("/api/notes", requireOwnerApi, (req, res) => {
-  const note = createNote({ ...resolveAuthorFromReq(req), reason: "create" });
+  // Allow creating directly inside a folder (e.g. a "+" on a folder header).
+  const project = normalizeProject((req.body || {}).project);
+  const note = createNote({ ...resolveAuthorFromReq(req), reason: "create", project });
   const summary = summarizeNote(note, "");
   broadcastGlobal({ type: "note-created", note: summary });
   res.json({ ok: true, note: summary });
+});
+
+// --- Projects (flat folders) -------------------------------------------------
+// Projects are derived from the `project` field on notes — there is no separate
+// "project" record to keep in sync. That keeps the model dead simple: a folder
+// exists exactly as long as ≥1 note points at it.
+
+// GET /api/projects → [{ slug, count, updatedAt }] sorted by recent activity.
+// Unfiled notes are summarized under slug "" so the UI can show a root bucket.
+app.get("/api/projects", requireOwnerApi, (_req, res) => {
+  const map = new Map<string, { slug: string; count: number; updatedAt: string }>();
+  for (const note of notes.values()) {
+    const slug = note.project || "";
+    const cur = map.get(slug);
+    if (!cur) {
+      map.set(slug, { slug, count: 1, updatedAt: note.updatedAt });
+    } else {
+      cur.count += 1;
+      if (note.updatedAt > cur.updatedAt) cur.updatedAt = note.updatedAt;
+    }
+  }
+  const projects = Array.from(map.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  res.json({ ok: true, projects });
+});
+
+// GET /api/projects/:slug → every jot in the folder, newest first, full bodies.
+// This is the "point an LLM at the whole project" surface. Two shapes:
+//   default JSON  → { ok, project, count, notes:[{id,title,updatedAt,shareId,markdown}] }
+//   ?format=text  → a single concatenated markdown stream, paste-ready for a
+//                   coding session (each jot fenced by a header + its id).
+app.get("/api/projects/:slug", requireOwnerApi, (req, res) => {
+  const slug = normalizeProject(req.params.slug === "_unfiled" ? "" : req.params.slug);
+  const matches = Array.from(notes.values())
+    .filter((n) => (n.project || "") === slug)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  if (String(req.query.format || "") === "text") {
+    const header = `# Project: ${slug || "(unfiled)"} — ${matches.length} jot${matches.length === 1 ? "" : "s"}\n`;
+    const body = matches
+      .map(
+        (n) =>
+          `\n\n${"=".repeat(72)}\n## ${n.title || "untitled"}\n` +
+          `<!-- jot id: ${n.id} · updated: ${n.updatedAt} -->\n${"=".repeat(72)}\n\n${n.markdown}`,
+      )
+      .join("");
+    res.type("text/plain").send(header + body + "\n");
+    return;
+  }
+
+  res.json({
+    ok: true,
+    project: slug,
+    count: matches.length,
+    notes: matches.map((n) => ({
+      id: n.id,
+      title: n.title,
+      updatedAt: n.updatedAt,
+      shareId: n.shareId,
+      markdown: n.markdown,
+    })),
+  });
+});
+
+// POST /api/projects/:slug/rename { to } → reassign every jot in the folder.
+// Rename to "" (or omit `to`) to dissolve the folder back into Unfiled.
+app.post("/api/projects/:slug/rename", requireOwnerApi, (req, res) => {
+  const from = normalizeProject(req.params.slug === "_unfiled" ? "" : req.params.slug);
+  const to = normalizeProject((req.body || {}).to);
+  if (from === to) {
+    res.json({ ok: true, moved: 0, project: to });
+    return;
+  }
+  const ident = resolveAuthorFromReq(req);
+  let moved = 0;
+  for (const note of notes.values()) {
+    if ((note.project || "") !== from) continue;
+    note.project = to;
+    note.updatedAt = nowIso();
+    persistNote(note, { broadcast: false, ...ident, reason: "rename-project" });
+    broadcastGlobal({ type: "note-meta-updated", note: summarizeNote(note, "") }, note.id);
+    moved += 1;
+  }
+  res.json({ ok: true, moved, project: to });
 });
 
 app.get("/api/notes/:id", requireOwnerApi, (req, res) => {
@@ -661,18 +773,22 @@ app.put("/api/notes/:id", requireOwnerApi, (req, res) => {
   const titleProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "title");
   const markdownProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "markdown");
   const shareAccessProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "shareAccess");
+  const projectProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "project");
   const nextTitle = titleProvided ? normalizeTitle(String(req.body.title || note.title)) : note.title;
   const nextMarkdown = markdownProvided ? String(req.body.markdown || "") : note.markdown;
   const nextShareAccess = shareAccessProvided && ["none", "view", "comment", "edit"].includes(req.body.shareAccess)
     ? (req.body.shareAccess as ShareAccess)
     : note.shareAccess;
+  const nextProject = projectProvided ? normalizeProject(req.body.project) : note.project;
   const titleChanged = nextTitle !== note.title;
   const markdownChanged = nextMarkdown !== note.markdown;
 
   const shareAccessChanged = nextShareAccess !== note.shareAccess;
+  const projectChanged = nextProject !== note.project;
 
   note.title = nextTitle;
   note.shareAccess = nextShareAccess;
+  note.project = nextProject;
   if (markdownChanged) {
     note.collab = collabFromMarkdown(nextMarkdown, note.collab.serverCounter + 1);
     note.markdown = nextMarkdown;
@@ -686,18 +802,20 @@ app.put("/api/notes/:id", requireOwnerApi, (req, res) => {
         ? "rename"
         : shareAccessChanged
           ? "share-access-change"
-          : "api-touch";
+          : projectChanged
+            ? "move-project"
+            : "api-touch";
     persistNote(note, { broadcast: false, ...ident, reason });
   }
   if (shareAccessChanged) {
     enforceShareAccessForConnections(note);
   }
-  if (titleChanged || markdownChanged || shareAccessChanged) {
+  if (titleChanged || markdownChanged || shareAccessChanged || projectChanged) {
     broadcastEditorHello(note);
     broadcastNoteUpdate(note);
     broadcastGlobal({ type: "note-meta-updated", note: summarizeNote(note, "") }, note.id);
   }
-  res.json({ ok: true, savedAt: note.updatedAt, shareAccess: note.shareAccess });
+  res.json({ ok: true, savedAt: note.updatedAt, shareAccess: note.shareAccess, project: note.project });
 });
 
 app.post("/api/notes/:id/refresh", requireOwnerApi, (req, res) => {
@@ -1821,6 +1939,7 @@ function loadNotesIntoMemory() {
     notes.set(id, {
       ...meta,
       shareAccess: (meta.shareAccess as ShareAccess) || "none",
+      project: normalizeProject(meta.project),
       markdown: collabToMarkdown(collab),
       threads,
       collab,
@@ -1869,6 +1988,7 @@ function createNote(opts: PersistOpts = {}) {
     shareAccess: "comment",
     createdAt: timestamp,
     updatedAt: timestamp,
+    project: normalizeProject(opts.project),
     markdown: "",
     threads: [],
     collab: newCollabState(),
@@ -1885,6 +2005,7 @@ type PersistOpts = {
   author?: string;
   authorKind?: AuthorKind;
   reason?: string;
+  project?: string;
 };
 
 function persistNote(note: NoteRecord, optsOrLegacy: PersistOpts | boolean = true) {
@@ -1902,6 +2023,7 @@ function persistNote(note: NoteRecord, optsOrLegacy: PersistOpts | boolean = tru
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
     threads: note.threads,
+    project: note.project || undefined,
     collab: saveCollabState(note.collab),
   };
 
@@ -1943,6 +2065,7 @@ function summarizeNote(note: NoteRecord, needle: string): NoteSummary {
     title: note.title,
     updatedAt: note.updatedAt,
     shareId: note.shareId,
+    project: note.project || "",
     snippet: buildSnippet(note, needle),
   };
 }
@@ -2048,6 +2171,7 @@ function serializeNoteForClient(note: NoteRecord, req: Request) {
       shareUrl: makeShareUrl(req, note.shareId),
       updatedAt: note.updatedAt,
       createdAt: note.createdAt,
+      project: note.project || "",
     },
     viewer: buildViewerInfo(req),
     threads: serializeThreads(note, req),

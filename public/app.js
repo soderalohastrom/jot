@@ -635,14 +635,52 @@ if (resolvedButton) {
         workspace.classList.toggle("workspace--with-files", !!open);
       }
 
+      // Collapsed-folder state persists across reloads. Stored as a set of
+      // slugs that are currently collapsed (so brand-new folders default open).
+      const COLLAPSE_KEY = "jot.folders.collapsed";
+      function loadCollapsed() {
+        try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "[]")); }
+        catch { return new Set(); }
+      }
+      function saveCollapsed(set) {
+        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(Array.from(set)));
+      }
+      let collapsed = loadCollapsed();
+
       function renderRow(n) {
         const isCurrent = n.id === noteId;
         return `
-          <button type="button" class="file-row${isCurrent ? " file-row--current" : ""}" data-note-id="${escapeHtml(n.id)}">
+          <button type="button" class="file-row${isCurrent ? " file-row--current" : ""}" draggable="true" data-note-id="${escapeHtml(n.id)}" data-project="${escapeHtml(n.project || "")}">
             <span class="file-row-title">${escapeHtml(n.title || "untitled")}</span>
             <span class="file-row-snippet">${escapeHtml(n.snippet || "Empty note")}</span>
             <span class="file-row-meta">${escapeHtml(formatRelativeTime(n.updatedAt))}</span>
           </button>
+        `;
+      }
+
+      function folderLabel(slug) {
+        return slug ? slug : "Unfiled";
+      }
+
+      function renderFolder(slug, rows, forceOpen) {
+        const isCollapsed = !forceOpen && collapsed.has(slug);
+        const caret = isCollapsed ? "▸" : "▾";
+        const renameBtn = slug
+          ? `<span class="folder-action" data-folder-action="rename" data-slug="${escapeHtml(slug)}" title="Rename folder">✎</span>`
+          : "";
+        return `
+          <div class="files-folder${isCollapsed ? " is-collapsed" : ""}" data-folder="${escapeHtml(slug)}">
+            <div class="folder-header" data-folder-toggle="${escapeHtml(slug)}" data-drop-slug="${escapeHtml(slug)}">
+              <span class="folder-caret">${caret}</span>
+              <span class="folder-name">${escapeHtml(folderLabel(slug))}</span>
+              <span class="folder-count">${rows.length}</span>
+              <span class="folder-actions">
+                <span class="folder-action" data-folder-action="new" data-slug="${escapeHtml(slug)}" title="New jot in this folder">＋</span>
+                ${renameBtn}
+              </span>
+            </div>
+            <div class="folder-body">${isCollapsed ? "" : rows.map(renderRow).join("")}</div>
+          </div>
         `;
       }
 
@@ -651,7 +689,30 @@ if (resolvedButton) {
           filesList.innerHTML = `<div class="files-empty">${lastQuery ? "No notes match." : "No notes yet."}</div>`;
           return;
         }
-        filesList.innerHTML = notesCache.map(renderRow).join("");
+        // Group by project. Named folders alphabetical, Unfiled always last.
+        const groups = new Map();
+        for (const n of notesCache) {
+          const slug = n.project || "";
+          if (!groups.has(slug)) groups.set(slug, []);
+          groups.get(slug).push(n);
+        }
+        const named = Array.from(groups.keys()).filter((s) => s).sort((a, b) => a.localeCompare(b));
+        const ordered = named.slice();
+        if (groups.has("")) ordered.push("");
+        // While searching, expand everything so matches aren't hidden in a
+        // collapsed folder.
+        const forceOpen = !!lastQuery;
+        filesList.innerHTML = ordered.map((slug) => renderFolder(slug, groups.get(slug), forceOpen)).join("");
+      }
+
+      // Reassign a jot to a folder, then refresh. Used by drag-drop.
+      async function moveNote(id, slug) {
+        try {
+          await api(`/api/notes/${id}`, { method: "PUT", body: { project: slug } });
+          fetchList(lastQuery);
+        } catch (err) {
+          console.error("Failed to move jot", err);
+        }
       }
 
       async function fetchList(query = "") {
@@ -668,12 +729,89 @@ if (resolvedButton) {
         return inflight;
       }
 
-      filesList.addEventListener("click", (event) => {
+      filesList.addEventListener("click", async (event) => {
+        // Folder action buttons (new / rename) — handle before navigation.
+        const action = event.target.closest("[data-folder-action]");
+        if (action) {
+          event.stopPropagation();
+          const kind = action.dataset.folderAction;
+          const slug = action.dataset.slug || "";
+          if (kind === "new") {
+            try {
+              const payload = await api("/api/notes", { method: "POST", body: { project: slug } });
+              if (payload?.note?.id) window.location.href = `/notes/${payload.note.id}`;
+            } catch (err) { console.error(err); }
+          } else if (kind === "rename") {
+            const next = window.prompt(`Rename folder "${folderLabel(slug)}" to:`, slug);
+            if (next !== null && next.trim() !== slug) {
+              try {
+                await api(`/api/projects/${encodeURIComponent(slug || "_unfiled")}/rename`, {
+                  method: "POST", body: { to: next.trim() },
+                });
+                fetchList(lastQuery);
+              } catch (err) { console.error(err); }
+            }
+          }
+          return;
+        }
+        // Folder header → toggle collapse.
+        const header = event.target.closest("[data-folder-toggle]");
+        if (header) {
+          const slug = header.dataset.folderToggle;
+          if (collapsed.has(slug)) collapsed.delete(slug);
+          else collapsed.add(slug);
+          saveCollapsed(collapsed);
+          renderList();
+          return;
+        }
+        // Row → open the jot.
         const row = event.target.closest("[data-note-id]");
         if (!row) return;
         const id = row.dataset.noteId;
         if (!id || id === noteId) return;
         window.location.href = `/notes/${id}`;
+      });
+
+      // ---- Drag & drop: drop a jot onto a folder header to refile it. ----
+      let dragId = null;
+      filesList.addEventListener("dragstart", (event) => {
+        const row = event.target.closest("[data-note-id]");
+        if (!row) return;
+        dragId = row.dataset.noteId;
+        event.dataTransfer.effectAllowed = "move";
+        try { event.dataTransfer.setData("text/plain", dragId); } catch {}
+        row.classList.add("file-row--dragging");
+      });
+      filesList.addEventListener("dragend", (event) => {
+        const row = event.target.closest("[data-note-id]");
+        if (row) row.classList.remove("file-row--dragging");
+        dragId = null;
+        filesList.querySelectorAll(".folder-header--dropover")
+          .forEach((el) => el.classList.remove("folder-header--dropover"));
+      });
+      filesList.addEventListener("dragover", (event) => {
+        const header = event.target.closest("[data-drop-slug]");
+        if (!header) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        header.classList.add("folder-header--dropover");
+      });
+      filesList.addEventListener("dragleave", (event) => {
+        const header = event.target.closest("[data-drop-slug]");
+        if (header) header.classList.remove("folder-header--dropover");
+      });
+      filesList.addEventListener("drop", (event) => {
+        const header = event.target.closest("[data-drop-slug]");
+        if (!header) return;
+        event.preventDefault();
+        header.classList.remove("folder-header--dropover");
+        const id = dragId || event.dataTransfer.getData("text/plain");
+        const targetSlug = header.dataset.dropSlug || "";
+        const row = id && filesList.querySelector(`[data-note-id="${CSS.escape(id)}"]`);
+        if (id && row && (row.dataset.project || "") !== targetSlug) {
+          moveNote(id, targetSlug);
+        }
+        dragId = null;
       });
 
       if (filesSearchInput) {
@@ -729,6 +867,72 @@ if (resolvedButton) {
           }
         },
       };
+    })();
+
+    // ---- Project chip (toolbar) ----
+    // Shows the current jot's folder and lets you file it inline: click the
+    // chip → type/pick a project (datalist of existing folders) → Enter.
+    // Owner editor only. Exposes updateProjectChip() to applyNotePayload.
+    const projectChipApi = (function setupProjectChip() {
+      const wrap = document.getElementById("projectChipWrap");
+      const chip = document.getElementById("projectChip");
+      const label = document.getElementById("projectChipLabel");
+      const picker = document.getElementById("projectPicker");
+      const input = document.getElementById("projectPickerInput");
+      const datalist = document.getElementById("projectPickerList");
+      if (!wrap || !chip || !label || !picker || !input || isPublic) {
+        return { update() {} };
+      }
+
+      function update() {
+        const slug = (state.note && state.note.project) || "";
+        label.textContent = slug || "Unfiled";
+        chip.classList.toggle("project-chip--filed", !!slug);
+      }
+
+      async function populateDatalist() {
+        try {
+          const payload = await api("/api/projects");
+          const slugs = (payload.projects || []).map((p) => p.slug).filter(Boolean).sort();
+          datalist.innerHTML = slugs.map((s) => `<option value="${escapeHtml(s)}"></option>`).join("");
+        } catch (err) { console.error(err); }
+      }
+
+      function openPicker() {
+        picker.classList.remove("hidden");
+        input.value = (state.note && state.note.project) || "";
+        populateDatalist();
+        setTimeout(() => { input.focus(); input.select(); }, 20);
+      }
+      function closePicker() { picker.classList.add("hidden"); }
+
+      async function commit() {
+        const next = input.value.trim();
+        const slug = (state.note && state.note.project) || "";
+        closePicker();
+        if (!state.note || next === slug) return;
+        try {
+          const payload = await api(`/api/notes/${state.note.id}`, { method: "PUT", body: { project: next } });
+          state.note.project = payload.project || "";
+          update();
+        } catch (err) { console.error(err); }
+      }
+
+      chip.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (picker.classList.contains("hidden")) openPicker();
+        else closePicker();
+      });
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); commit(); }
+        else if (e.key === "Escape") { e.preventDefault(); closePicker(); }
+      });
+      input.addEventListener("blur", () => { setTimeout(commit, 120); });
+      document.addEventListener("click", (e) => {
+        if (!picker.classList.contains("hidden") && !wrap.contains(e.target)) closePicker();
+      });
+
+      return { update };
     })();
 
     // ---- Revisions / History panel ----
@@ -1215,6 +1419,7 @@ if (resolvedButton) {
       updateResolvedButton(refsArg.resolvedButton);
       updateCommentsButton(refsArg.commentsButton);
       updateShareInline();
+      if (typeof projectChipApi !== "undefined") projectChipApi.update();
       syncThreadLayout(refsArg);
     }
 
@@ -1264,6 +1469,16 @@ if (resolvedButton) {
             <jot-icon-button icon="sidebar" label="Files panel" id="filesPanelButton"></jot-icon-button>
             <jot-icon-button icon="back" label="Back to notes" id="notesButton"></jot-icon-button>
             <input id="titleInput" class="title-input" type="text" spellcheck="false" value="untitled" />
+            <div class="project-chip-wrap" id="projectChipWrap">
+              <button type="button" class="project-chip" id="projectChip" title="Project folder — click to file this jot">
+                <span class="project-chip-icon">${window.__ICONS__?.folder || "📁"}</span>
+                <span class="project-chip-label" id="projectChipLabel">Unfiled</span>
+              </button>
+              <div class="project-picker hidden" id="projectPicker">
+                <input id="projectPickerInput" type="text" list="projectPickerList" placeholder="Project name…" spellcheck="false" autocomplete="off" />
+                <datalist id="projectPickerList"></datalist>
+              </div>
+            </div>
             <span class="status-text" id="saveStatus"></span>
           </div>
           <div class="topbar-right">

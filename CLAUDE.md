@@ -85,6 +85,35 @@ For this jot fork, the bridge's `JOT_TO_PEERS_TARGET` defaults to `27f7a3ol` (mi
 - AI-triggered refresh endpoint (`/api/admin/reload`, commit `17900a6`)
 - `--file` flag on `jot update markdown` for file-native body transport (commit `8564927`)
 - `share` CLI command + view/comment share modes (commit `6242f11`)
+- Projects (flat folders) — group jots into one-folder-each buckets, addressable from UI, CLI, and API (see below)
+
+## Projects (flat folders)
+
+Each jot carries an optional `project` slug (`NoteMetaFile.project` → `data/notes/<id>.json`). One folder per jot; empty = "Unfiled". Slugs are normalized by `normalizeProject()` in `src/server.ts` (lowercased, spaces→hyphens, `[a-z0-9-_/]` only; `/` is kept legal so a future nested mode is non-breaking, but the UI is flat today).
+
+**The point of it** is pointing an LLM at a whole project. Three surfaces, all owner-auth:
+
+```
+# CLI
+node cli/jot.mjs local projects                  # folders + jot counts
+node cli/jot.mjs local list --project=mise        # filter the list (--project= → unfiled)
+node cli/jot.mjs local project read mise           # ★ dump EVERY jot in mise as one markdown stream
+node cli/jot.mjs local project read mise --json    # same, JSON with per-note bodies
+node cli/jot.mjs local move <id> mise              # file a jot (omit project → unfile)
+node cli/jot.mjs local project rename mise mise-spring   # move whole folder (empty → unfiled)
+
+# API
+GET  /api/notes?project=mise            # filtered summaries (project= → unfiled)
+GET  /api/projects                      # [{ slug, count, updatedAt }], unfiled slug = ""
+GET  /api/projects/:slug                # { notes:[{id,title,updatedAt,shareId,markdown}] }
+GET  /api/projects/:slug?format=text    # concatenated markdown, paste-ready for CC
+POST /api/projects/:slug/rename { to }  # reassign whole folder
+PUT  /api/notes/:id { project }         # set a single jot's folder
+```
+
+Use `_unfiled` as the `:slug` path segment to address the Unfiled bucket over HTTP (empty path segment isn't routable). The back-channel bridge can pull a whole project via `GET /api/projects/<slug>?format=text` to hand a CC session the full context for "go read all the Mise jots."
+
+**UI:** the files panel groups rows into collapsible folders (Unfiled last; collapse state in `localStorage["jot.folders.collapsed"]`). Drag a row onto a folder header to refile it. Each folder header has `＋` (new jot in folder) and `✎` (rename folder). The editor toolbar shows a project chip next to the title — click it to file the current jot via a datalist of existing folders.
 
 ## Common debugging
 

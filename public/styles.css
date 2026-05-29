@@ -707,6 +707,109 @@ input:focus, textarea:focus { border-color: var(--muted); }
   margin-top: 0.1rem;
 }
 
+/* ---- Project folders (files panel) ---- */
+.files-folder { display: flex; flex-direction: column; }
+.folder-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  margin-top: 0.15rem;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.folder-header:hover { background: var(--bg-3, var(--line)); color: var(--text); }
+.folder-header--dropover {
+  background: var(--accent, var(--text));
+  color: var(--bg-1, #000);
+  outline: 1px dashed var(--accent, var(--text));
+}
+.folder-caret { width: 0.8em; display: inline-block; }
+.folder-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.folder-count {
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-3, var(--line));
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  font-size: 0.68rem;
+}
+.folder-actions { display: inline-flex; gap: 0.2rem; opacity: 0; transition: opacity 0.12s; }
+.folder-header:hover .folder-actions { opacity: 1; }
+.folder-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.folder-action:hover { background: var(--bg-1, transparent); }
+.folder-body { display: flex; flex-direction: column; gap: 0.2rem; padding-left: 0.35rem; }
+.files-folder.is-collapsed .folder-body { display: none; }
+.file-row[draggable="true"] { cursor: grab; }
+.file-row--dragging { opacity: 0.45; }
+
+/* ---- Project chip (toolbar) ---- */
+.project-chip-wrap { position: relative; display: inline-flex; }
+.project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 12rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-2, transparent);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.project-chip:hover { border-color: var(--accent, var(--text)); color: var(--text); }
+.project-chip--filed { color: var(--text); border-color: var(--accent, var(--text)); }
+.project-chip-icon { display: inline-flex; opacity: 0.8; }
+.project-chip-icon svg { width: 0.9em; height: 0.9em; }
+.project-chip-label { overflow: hidden; text-overflow: ellipsis; }
+.project-picker {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 40;
+  background: var(--bg-2, var(--editor-bg));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.project-picker.hidden { display: none; }
+.project-picker input {
+  width: 14rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-1, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+}
+.project-picker input:focus { outline: none; border-color: var(--accent, var(--text)); }
+
 /* When BOTH side panels are open, the workspace becomes a 4-column grid:
    files-panel | editor | preview | revisions-panel. Keeps the editor + preview
    readable while still showing the lists on either side. */

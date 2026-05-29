@@ -31,7 +31,7 @@ function getInstance(name) {
   return instance;
 }
 
-async function request(instance, method, endpoint, body) {
+async function request(instance, method, endpoint, body, opts = {}) {
   const url = `${instance.baseUrl.replace(/\/$/, "")}${endpoint}`;
   const options = {
     method,
@@ -48,6 +48,18 @@ async function request(instance, method, endpoint, body) {
   }
 
   const response = await fetch(url, options);
+
+  // Some endpoints (e.g. /api/projects/:slug?format=text) return a raw text
+  // stream instead of JSON — opt into that with { raw: true }.
+  if (opts.raw) {
+    const text = await response.text();
+    if (!response.ok) {
+      console.error(`Error ${response.status}: ${text || "Request failed"}`);
+      process.exit(1);
+    }
+    return text;
+  }
+
   const payload = await response.json();
 
   if (!response.ok) {
@@ -283,10 +295,81 @@ if (isShareInstance(instance)) {
 
 switch (subCommand) {
   case "list": {
-    const payload = await request(instance, "GET", "/api/notes");
-    for (const note of payload.notes) {
-      console.log(`${note.id}\t${note.title}\t${note.updatedAt}`);
+    // Optional folder filter: --project=mise  (--project= alone → unfiled).
+    const projArg = args.find((a) => a.startsWith("--project="));
+    let endpoint = "/api/notes";
+    if (projArg !== undefined) {
+      endpoint += `?project=${encodeURIComponent(projArg.split("=").slice(1).join("="))}`;
     }
+    const payload = await request(instance, "GET", endpoint);
+    for (const note of payload.notes) {
+      const proj = note.project ? `[${note.project}]` : "[-]";
+      console.log(`${note.id}\t${proj}\t${note.title}\t${note.updatedAt}`);
+    }
+    break;
+  }
+
+  case "projects": {
+    // List every folder with a jot count, newest activity first.
+    const payload = await request(instance, "GET", "/api/projects");
+    if (!payload.projects || payload.projects.length === 0) {
+      console.log("(no notes yet)");
+      break;
+    }
+    for (const p of payload.projects) {
+      const name = p.slug || "(unfiled)";
+      console.log(`${name}\t${p.count} jot${p.count === 1 ? "" : "s"}\t${p.updatedAt}`);
+    }
+    break;
+  }
+
+  case "project": {
+    // jot <instance> project read <slug>            → concatenated markdown (LLM-ready)
+    // jot <instance> project read <slug> --json      → JSON {notes:[{...,markdown}]}
+    // jot <instance> project list <slug>             → id/title/updated rows
+    const action = args[2];
+    const slug = args[3] || "";
+    const slugPath = encodeURIComponent(slug || "_unfiled");
+    if (action === "read") {
+      if (args.includes("--json")) {
+        const payload = await request(instance, "GET", `/api/projects/${slugPath}`);
+        console.log(JSON.stringify(payload, null, 2));
+      } else {
+        const text = await request(instance, "GET", `/api/projects/${slugPath}?format=text`, undefined, { raw: true });
+        process.stdout.write(text);
+      }
+      break;
+    }
+    if (action === "list") {
+      const payload = await request(instance, "GET", `/api/projects/${slugPath}`);
+      for (const n of payload.notes) {
+        console.log(`${n.id}\t${n.title}\t${n.updatedAt}`);
+      }
+      break;
+    }
+    if (action === "rename") {
+      const to = args[4] ?? "";
+      const payload = await request(instance, "POST", `/api/projects/${slugPath}/rename`, { to });
+      console.log(`Moved ${payload.moved} jot${payload.moved === 1 ? "" : "s"} → ${payload.project || "(unfiled)"}`);
+      break;
+    }
+    console.error("Usage: jot <instance> project read <slug> [--json]");
+    console.error("       jot <instance> project list <slug>");
+    console.error("       jot <instance> project rename <slug> <newSlug>   (empty newSlug → unfiled)");
+    process.exit(1);
+    break;
+  }
+
+  case "move": {
+    // jot <instance> move <id> <project>   (empty project → unfiled)
+    const noteId = args[2];
+    if (!noteId) {
+      console.error("Usage: jot <instance> move <id> <project>   (omit project to unfile)");
+      process.exit(1);
+    }
+    const project = args.slice(3).join(" ");
+    const payload = await request(instance, "PUT", `/api/notes/${noteId}`, { project });
+    console.log(`Moved ${noteId} → ${payload.project || "(unfiled)"}`);
     break;
   }
 
@@ -670,8 +753,17 @@ Instance management:
   jot instances                           List registered instances
 
 Owner commands:
-  jot <instance> list                     List all notes
+  jot <instance> list                     List all notes (cols: id, [project], title, updated)
+  jot <instance> list --project=mise      List only jots in a folder (--project= → unfiled)
   jot <instance> search <query>           Search notes
+
+Projects (flat folders):
+  jot <instance> projects                 List folders with jot counts
+  jot <instance> project read <slug>      Dump ALL jots in a folder as one markdown stream
+  jot <instance> project read <slug> --json  Same, as JSON with per-note bodies
+  jot <instance> project list <slug>      List jots in a folder (id, title, updated)
+  jot <instance> project rename <slug> <new>  Move whole folder (empty <new> → unfiled)
+  jot <instance> move <id> <project>      Put a jot in a folder (omit project → unfiled)
   jot <instance> read <id>                Read a note with comments
   jot <instance> create [title]           Create a new note
   jot <instance> share <id> [access]      Get/set share access (none|view|comment|edit)
