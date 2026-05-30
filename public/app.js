@@ -647,6 +647,33 @@ if (resolvedButton) {
       }
       let collapsed = loadCollapsed();
 
+      // Empty folders have no notes to anchor them, so we remember them here
+      // (browser-only, like collapse state). The moment a note is filed into
+      // one it becomes a real folder and is pruned from this set on render.
+      const EMPTY_KEY = "jot.folders.empty";
+      function loadEmptyFolders() {
+        try { return new Set(JSON.parse(localStorage.getItem(EMPTY_KEY) || "[]")); }
+        catch { return new Set(); }
+      }
+      function saveEmptyFolders(set) {
+        localStorage.setItem(EMPTY_KEY, JSON.stringify(Array.from(set)));
+      }
+      let emptyFolders = loadEmptyFolders();
+
+      // Mirror of the server's normalizeProject (src/server.ts) so a slug typed
+      // in the browser collapses identically to one the server would store.
+      function normalizeProjectSlug(value) {
+        if (typeof value !== "string") return "";
+        return value
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9\-_/\s]/g, "")
+          .replace(/\s+/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/^[-/]+|[-/]+$/g, "")
+          .slice(0, 60);
+      }
+
       function renderRow(n) {
         const isCurrent = n.id === noteId;
         return `
@@ -665,36 +692,62 @@ if (resolvedButton) {
       function renderFolder(slug, rows, forceOpen) {
         const isCollapsed = !forceOpen && collapsed.has(slug);
         const caret = isCollapsed ? "▸" : "▾";
+        const isEmpty = rows.length === 0;
         const renameBtn = slug
           ? `<span class="folder-action" data-folder-action="rename" data-slug="${escapeHtml(slug)}" title="Rename folder">✎</span>`
           : "";
+        // Empty placeholder folders get a remove (✕) action and a drop hint
+        // instead of a count, so they read as "drag stuff here".
+        const removeBtn = (isEmpty && slug)
+          ? `<span class="folder-action" data-folder-action="remove" data-slug="${escapeHtml(slug)}" title="Remove empty folder">✕</span>`
+          : "";
+        const badge = isEmpty
+          ? `<span class="folder-count folder-count--empty">empty</span>`
+          : `<span class="folder-count">${rows.length}</span>`;
+        const body = isEmpty
+          ? `<div class="folder-empty-hint" data-drop-slug="${escapeHtml(slug)}">drag notes here…</div>`
+          : rows.map(renderRow).join("");
         return `
-          <div class="files-folder${isCollapsed ? " is-collapsed" : ""}" data-folder="${escapeHtml(slug)}">
+          <div class="files-folder${isCollapsed ? " is-collapsed" : ""}${isEmpty ? " is-empty" : ""}" data-folder="${escapeHtml(slug)}">
             <div class="folder-header" data-folder-toggle="${escapeHtml(slug)}" data-drop-slug="${escapeHtml(slug)}">
               <span class="folder-caret">${caret}</span>
               <span class="folder-name">${escapeHtml(folderLabel(slug))}</span>
-              <span class="folder-count">${rows.length}</span>
+              ${badge}
               <span class="folder-actions">
                 <span class="folder-action" data-folder-action="new" data-slug="${escapeHtml(slug)}" title="New jot in this folder">＋</span>
                 ${renameBtn}
+                ${removeBtn}
               </span>
             </div>
-            <div class="folder-body">${isCollapsed ? "" : rows.map(renderRow).join("")}</div>
+            <div class="folder-body">${isCollapsed ? "" : body}</div>
           </div>
         `;
       }
 
       function renderList() {
-        if (!notesCache.length) {
-          filesList.innerHTML = `<div class="files-empty">${lastQuery ? "No notes match." : "No notes yet."}</div>`;
-          return;
-        }
         // Group by project. Named folders alphabetical, Unfiled always last.
         const groups = new Map();
         for (const n of notesCache) {
           const slug = n.project || "";
           if (!groups.has(slug)) groups.set(slug, []);
           groups.get(slug).push(n);
+        }
+        // A staged empty folder that now has notes is "real" — forget it.
+        let pruned = false;
+        for (const slug of Array.from(emptyFolders)) {
+          if (groups.has(slug)) { emptyFolders.delete(slug); pruned = true; }
+        }
+        if (pruned) saveEmptyFolders(emptyFolders);
+        // Merge remaining empty placeholders in — but not while searching,
+        // since they have nothing to match.
+        if (!lastQuery) {
+          for (const slug of emptyFolders) {
+            if (slug && !groups.has(slug)) groups.set(slug, []);
+          }
+        }
+        if (groups.size === 0) {
+          filesList.innerHTML = `<div class="files-empty">${lastQuery ? "No notes match." : "No notes yet."}</div>`;
+          return;
         }
         const named = Array.from(groups.keys()).filter((s) => s).sort((a, b) => a.localeCompare(b));
         const ordered = named.slice();
@@ -751,6 +804,11 @@ if (resolvedButton) {
                 fetchList(lastQuery);
               } catch (err) { console.error(err); }
             }
+          } else if (kind === "remove") {
+            // Only ever shown on empty placeholders — just forget the name.
+            emptyFolders.delete(slug);
+            saveEmptyFolders(emptyFolders);
+            renderList();
           }
           return;
         }
@@ -824,6 +882,22 @@ if (resolvedButton) {
         filesCloseButton.addEventListener("click", () => {
           localStorage.setItem("jot.filesPanel", "0");
           applyOpen(false);
+        });
+      }
+      const newFolderButton = document.getElementById("newFolderButton");
+      if (newFolderButton) {
+        newFolderButton.addEventListener("click", () => {
+          const raw = window.prompt("New folder name:");
+          if (raw === null) return;
+          const slug = normalizeProjectSlug(raw);
+          if (!slug) return;
+          // Stage as an empty folder; renderList prunes it back out if a real
+          // folder by that name already exists (harmless either way).
+          emptyFolders.add(slug);
+          collapsed.delete(slug); // open it so the drop hint shows
+          saveEmptyFolders(emptyFolders);
+          saveCollapsed(collapsed);
+          if (!loaded) fetchList(""); else renderList();
         });
       }
       if (filesPanelButton) {
@@ -1509,7 +1583,10 @@ if (resolvedButton) {
           <aside class="files-panel" id="filesPanel" aria-label="Notes">
             <header class="files-panel-header">
               <span class="files-panel-title">Notes</span>
-              <jot-icon-button icon="close" label="Close files" id="filesCloseButton"></jot-icon-button>
+              <span class="files-panel-header-actions">
+                <jot-icon-button icon="folderPlus" label="New folder" id="newFolderButton"></jot-icon-button>
+                <jot-icon-button icon="close" label="Close files" id="filesCloseButton"></jot-icon-button>
+              </span>
             </header>
             <div class="files-panel-search">
               <input id="filesSearchInput" type="search" placeholder="Search notes..." spellcheck="false" />

@@ -764,6 +764,33 @@ input:focus, textarea:focus { border-color: var(--muted); }
 .file-row[draggable="true"] { cursor: grab; }
 .file-row--dragging { opacity: 0.45; }
 
+/* Empty (placeholder) folders — created in-browser, drag notes in to fill. */
+.files-panel-header-actions { display: inline-flex; align-items: center; gap: 0.1rem; }
+.folder-count--empty {
+  background: transparent;
+  text-transform: none;
+  letter-spacing: 0;
+  font-style: italic;
+  opacity: 0.75;
+}
+.folder-empty-hint {
+  margin: 0.15rem 0.35rem 0.25rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-style: italic;
+  text-align: center;
+}
+.folder-empty-hint.folder-header--dropover {
+  border-style: solid;
+  border-color: var(--accent, var(--text));
+  background: var(--bg-3, var(--line));
+  color: var(--text);
+  outline: none;
+}
+
 /* ---- Project chip (toolbar) ---- */
 .project-chip-wrap { position: relative; display: inline-flex; }
 .project-chip {
