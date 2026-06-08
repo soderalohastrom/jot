@@ -303,7 +303,7 @@ switch (subCommand) {
     }
     const payload = await request(instance, "GET", endpoint);
     for (const note of payload.notes) {
-      const proj = note.project ? `[${note.project}]` : "[-]";
+      const proj = note.project ? `[${note.project}]` : "[root]";
       console.log(`${note.id}\t${proj}\t${note.title}\t${note.updatedAt}`);
     }
     break;
@@ -317,7 +317,7 @@ switch (subCommand) {
       break;
     }
     for (const p of payload.projects) {
-      const name = p.slug || "(unfiled)";
+      const name = p.slug || "(root)";
       console.log(`${name}\t${p.count} jot${p.count === 1 ? "" : "s"}\t${p.updatedAt}`);
     }
     break;
@@ -382,6 +382,32 @@ switch (subCommand) {
     const payload = await request(instance, "GET", `/api/notes?q=${encodeURIComponent(query)}`);
     for (const note of payload.notes) {
       console.log(`${note.id}\t${note.title}\t${note.updatedAt}`);
+    }
+    break;
+  }
+
+  case "connections": {
+    // jot <instance> connections <id> [--limit=N]  → related jots + why (provenance)
+    const noteId = args[2];
+    if (!noteId) {
+      console.error("Usage: jot <instance> connections <id> [--limit=N]");
+      process.exit(1);
+    }
+    const limitArg = args.find((a) => a.startsWith("--limit="));
+    let endpoint = `/api/notes/${noteId}/connections`;
+    if (limitArg) endpoint += `?limit=${encodeURIComponent(limitArg.split("=")[1])}`;
+    const payload = await request(instance, "GET", endpoint);
+    const connections = payload.connections || [];
+    if (connections.length === 0) {
+      console.log("(no connections found)");
+      break;
+    }
+    for (const c of connections) {
+      const types = c.edges.map((e) => e.type).join(",");
+      console.log(`${c.id}\t${c.score.toFixed(2)}\t[${types}]\t${c.title}`);
+      for (const e of c.edges) {
+        console.log(`    · ${e.reason}`);
+      }
     }
     break;
   }
