@@ -84,7 +84,7 @@
 
   function setPreviewHtml(refs, html) {
     if (!refs.previewContent) return;
-    refs.previewContent.innerHTML = html;
+    refs.previewContent.innerHTML = html + (state.relatedHtml || "");
     renderMermaid(refs.previewContent);
   }
 
@@ -134,6 +134,7 @@
             <div class="topbar-title">notes</div>
           </div>
           <div class="topbar-right">
+            <button type="button" class="jot-btn-icon jot-btn-icon--md" id="viewToggleButton" aria-label="Switch to grid view" title="Switch to grid view"></button>
             <jot-icon-button icon="plus" label="New note" id="newNoteButton"></jot-icon-button>
             <jot-icon-button icon="settings" label="Settings" id="settingsButton"></jot-icon-button>
             <jot-icon-button icon="logout" label="Logout" id="logoutButton"></jot-icon-button>
@@ -157,8 +158,27 @@
     const logoutButton = document.getElementById("logoutButton");
     const listModalBackdrop = document.getElementById("listModalBackdrop");
 
+    const viewToggleButton = document.getElementById("viewToggleButton");
+    function applyHomeView(view) {
+      const isGrid = view === "grid";
+      noteList.classList.toggle("is-grid", isGrid);
+      const next = isGrid ? "list" : "grid";
+      viewToggleButton.innerHTML = (window.__ICONS__ && window.__ICONS__[next]) || "";
+      const label = `Switch to ${next} view`;
+      viewToggleButton.setAttribute("aria-label", label);
+      viewToggleButton.title = label;
+    }
+    let homeView = localStorage.getItem("jot.home.view") === "grid" ? "grid" : "list";
+    applyHomeView(homeView);
+    viewToggleButton.addEventListener("click", () => {
+      homeView = homeView === "grid" ? "list" : "grid";
+      localStorage.setItem("jot.home.view", homeView);
+      applyHomeView(homeView);
+    });
+
     newNoteButton.addEventListener("click", async () => {
       const payload = await api("/api/notes", { method: "POST" });
+      prepareFreshNoteOpen();
       window.location.href = `/notes/${payload.note.id}`;
     });
 
@@ -314,6 +334,7 @@
         noteList.innerHTML = `<div class="empty-state-create"><p class="empty-state-text">No notes yet.</p><jot-button variant="primary" id="emptyCreateBtn">Create note</jot-button></div>`;
         document.getElementById("emptyCreateBtn").addEventListener("click", async () => {
           const payload = await api("/api/notes", { method: "POST" });
+          prepareFreshNoteOpen();
           window.location.href = `/notes/${payload.note.id}`;
         });
         return;
@@ -340,7 +361,10 @@
         noteList.prepend(row);
         requestAnimationFrame(() => row.classList.remove("note-row--entering"));
         if (localStorage.getItem("jot.autoOpenNewNotes") === "1" && !isUserTyping()) {
-          setTimeout(() => { window.location.href = `/notes/${msg.note.id}`; }, 400);
+          setTimeout(() => {
+            prepareFreshNoteOpen();
+            window.location.href = `/notes/${msg.note.id}`;
+          }, 400);
         } else {
           queueNewNoteToast(msg.note);
         }
@@ -428,6 +452,7 @@
     if (newNoteButton) {
       newNoteButton.addEventListener("click", async () => {
         const payload = await api("/api/notes", { method: "POST" });
+        prepareFreshNoteOpen();
         window.location.href = `/notes/${payload.note.id}`;
       });
     }
@@ -685,10 +710,6 @@ if (resolvedButton) {
         `;
       }
 
-      function folderLabel(slug) {
-        return slug ? slug : "Unfiled";
-      }
-
       function renderFolder(slug, rows, forceOpen) {
         const isCollapsed = !forceOpen && collapsed.has(slug);
         const caret = isCollapsed ? "▸" : "▾";
@@ -711,7 +732,7 @@ if (resolvedButton) {
           <div class="files-folder${isCollapsed ? " is-collapsed" : ""}${isEmpty ? " is-empty" : ""}" data-folder="${escapeHtml(slug)}">
             <div class="folder-header" data-folder-toggle="${escapeHtml(slug)}" data-drop-slug="${escapeHtml(slug)}">
               <span class="folder-caret">${caret}</span>
-              <span class="folder-name">${escapeHtml(folderLabel(slug))}</span>
+              <span class="folder-name">${escapeHtml(slug)}</span>
               ${badge}
               <span class="folder-actions">
                 <span class="folder-action" data-folder-action="new" data-slug="${escapeHtml(slug)}" title="New jot in this folder">＋</span>
@@ -724,8 +745,20 @@ if (resolvedButton) {
         `;
       }
 
+      function renderRoot(rows) {
+        if (!rows.length) {
+          return "";
+        }
+        return `
+          <div class="files-root" data-drop-slug="">
+            ${rows.map(renderRow).join("")}
+          </div>
+        `;
+      }
+
       function renderList() {
-        // Group by project. Named folders alphabetical, Unfiled always last.
+        // Group by project. Root notes stay at the top; named folders follow
+        // in alphabetical order.
         const groups = new Map();
         for (const n of notesCache) {
           const slug = n.project || "";
@@ -750,12 +783,17 @@ if (resolvedButton) {
           return;
         }
         const named = Array.from(groups.keys()).filter((s) => s).sort((a, b) => a.localeCompare(b));
-        const ordered = named.slice();
-        if (groups.has("")) ordered.push("");
         // While searching, expand everything so matches aren't hidden in a
         // collapsed folder.
         const forceOpen = !!lastQuery;
-        filesList.innerHTML = ordered.map((slug) => renderFolder(slug, groups.get(slug), forceOpen)).join("");
+        const parts = [];
+        if (groups.has("")) {
+          parts.push(renderRoot(groups.get("")));
+        }
+        for (const slug of named) {
+          parts.push(renderFolder(slug, groups.get(slug), forceOpen));
+        }
+        filesList.innerHTML = parts.join("");
       }
 
       // Reassign a jot to a folder, then refresh. Used by drag-drop.
@@ -792,10 +830,13 @@ if (resolvedButton) {
           if (kind === "new") {
             try {
               const payload = await api("/api/notes", { method: "POST", body: { project: slug } });
-              if (payload?.note?.id) window.location.href = `/notes/${payload.note.id}`;
+              if (payload?.note?.id) {
+                prepareFreshNoteOpen();
+                window.location.href = `/notes/${payload.note.id}`;
+              }
             } catch (err) { console.error(err); }
           } else if (kind === "rename") {
-            const next = window.prompt(`Rename folder "${folderLabel(slug)}" to:`, slug);
+            const next = window.prompt(`Rename folder "${slug}" to:`, slug);
             if (next !== null && next.trim() !== slug) {
               try {
                 await api(`/api/projects/${encodeURIComponent(slug || "_unfiled")}/rename`, {
@@ -960,7 +1001,7 @@ if (resolvedButton) {
 
       function update() {
         const slug = (state.note && state.note.project) || "";
-        label.textContent = slug || "Unfiled";
+        label.textContent = slug || "Root";
         chip.classList.toggle("project-chip--filed", !!slug);
       }
 
@@ -1302,7 +1343,10 @@ if (resolvedButton) {
       if (msg.type === "note-created" && msg.note) {
         if (state.note && msg.note.id === state.note.id) return;
         if (localStorage.getItem("jot.autoOpenNewNotes") === "1" && !isUserTyping()) {
-          setTimeout(() => { window.location.href = `/notes/${msg.note.id}`; }, 400);
+          setTimeout(() => {
+            prepareFreshNoteOpen();
+            window.location.href = `/notes/${msg.note.id}`;
+          }, 400);
           return;
         }
         queueNewNoteToast(msg.note);
@@ -1473,6 +1517,7 @@ if (resolvedButton) {
       state.note = payload.note;
       state.viewer = payload.viewer;
       state.threads = payload.threads;
+      state.relatedHtml = "";
 
       if (refsArg.topbarTitle) {
         refsArg.topbarTitle.textContent = payload.note.title || "untitled";
@@ -1495,6 +1540,37 @@ if (resolvedButton) {
       updateShareInline();
       if (typeof projectChipApi !== "undefined") projectChipApi.update();
       syncThreadLayout(refsArg);
+      if (!publicMode && state.note?.id) loadNoteConnections(state.note.id, refsArg);
+    }
+
+    function renderRelatedHtml(conns) {
+      return (
+        `<aside class="note-related"><div class="note-related-title">Related</div><div class="note-related-list">` +
+        conns
+          .map(
+            (c) =>
+              `<a class="note-related-chip" href="/notes/${encodeURIComponent(c.id)}" title="${escapeHtml(
+                (c.edges || []).map((e) => e.reason).join(" · "),
+              )}">${escapeHtml(c.title || "untitled")}</a>`,
+          )
+          .join("") +
+        `</div></aside>`
+      );
+    }
+
+    async function loadNoteConnections(noteId, refsArg) {
+      try {
+        const payload = await api(`/api/notes/${noteId}/connections?limit=8`);
+        const conns = (payload && payload.connections) || [];
+        state.relatedHtml = conns.length ? renderRelatedHtml(conns) : "";
+      } catch {
+        state.relatedHtml = "";
+      }
+      if (refsArg.previewContent) {
+        const existing = refsArg.previewContent.querySelector(".note-related");
+        if (existing) existing.remove();
+        if (state.relatedHtml) refsArg.previewContent.insertAdjacentHTML("beforeend", state.relatedHtml);
+      }
     }
 
     function updateShareInline() {
@@ -1541,12 +1617,12 @@ if (resolvedButton) {
         <header class="topbar">
           <div class="topbar-left">
             <jot-icon-button icon="sidebar" label="Files panel" id="filesPanelButton"></jot-icon-button>
-            <jot-icon-button icon="back" label="Back to notes" id="notesButton"></jot-icon-button>
+            <jot-icon-button icon="home" label="Back to notes" id="notesButton"></jot-icon-button>
             <input id="titleInput" class="title-input" type="text" spellcheck="false" value="untitled" />
             <div class="project-chip-wrap" id="projectChipWrap">
               <button type="button" class="project-chip" id="projectChip" title="Project folder — click to file this jot">
                 <span class="project-chip-icon">${window.__ICONS__?.folder || "📁"}</span>
-                <span class="project-chip-label" id="projectChipLabel">Unfiled</span>
+                <span class="project-chip-label" id="projectChipLabel">Root</span>
               </button>
               <div class="project-picker hidden" id="projectPicker">
                 <input id="projectPickerInput" type="text" list="projectPickerList" placeholder="Project name…" spellcheck="false" autocomplete="off" />
@@ -1673,7 +1749,7 @@ if (resolvedButton) {
           <div class="topbar-left">
             <div>
               <div class="topbar-title" id="topbarTitle">note</div>
-              <div class="topbar-title-subtle">editing as <span id="commenterLabel">anonymous</span></div>
+            <div class="topbar-title-subtle">editing as <span id="commenterLabel">anonymous</span></div>
             </div>
             <span class="status-text" id="saveStatus"></span>
           </div>
@@ -1708,6 +1784,14 @@ if (resolvedButton) {
         <div class="modal-backdrop hidden" id="modalBackdrop"></div>
       </div>
     `;
+  }
+
+  function prepareFreshNoteOpen() {
+    localStorage.setItem("jot.zenMode", "0");
+    const workspace = document.querySelector(".workspace");
+    if (workspace) {
+      workspace.classList.remove("workspace--zen");
+    }
   }
 
   function setSaveStatus(refs, value) {

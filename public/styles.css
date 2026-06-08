@@ -225,6 +225,36 @@ input:focus, textarea:focus { border-color: var(--muted); }
 .note-row-snippet { color: var(--muted); font-size: 0.88rem; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .note-row-meta { font-size: 0.78rem; color: var(--muted-2); margin-top: 0.2rem; }
 
+/* --- Home card-grid view (toggle via .is-grid on #noteList) --- */
+.note-list.is-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+.note-list.is-grid .note-row {
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: 0.3rem;
+  padding: 0.9rem;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  position: relative;
+}
+.note-list.is-grid .note-row-title { padding-right: 1.4rem; }
+.note-list.is-grid .note-row-snippet {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.note-list.is-grid .note-delete-btn {
+  position: absolute; top: 0.4rem; right: 0.4rem;
+  opacity: 0; transition: opacity 120ms ease;
+}
+.note-list.is-grid .note-row:hover .note-delete-btn { opacity: 1; }
+
 .empty-state-create { display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 3rem 1rem; }
 .empty-state-text { color: var(--muted); font-size: 1rem; margin: 0; }
 
@@ -293,6 +323,13 @@ input:focus, textarea:focus { border-color: var(--muted); }
 .preview-scroll { overflow-y: auto; overflow-x: hidden; height: 100%; overscroll-behavior: contain; }
 .preview-canvas { position: relative; min-height: 100%; }
 .preview-content { max-width: 880px; min-height: 100%; margin: 0 auto; padding: 2rem 1.75rem 8rem 2.5rem; }
+
+/* Related notes — appended inside .preview-content by the connections feature. */
+.note-related { margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+.note-related-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-2); margin-bottom: 0.6rem; }
+.note-related-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.note-related-chip { display: inline-block; max-width: 100%; padding: 0.3rem 0.65rem; border: 1px solid var(--card-border); border-radius: 999px; background: var(--card-bg); color: var(--muted); font-size: 0.8rem; line-height: 1.2; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-related-chip:hover { color: var(--text); border-color: var(--accent); background: var(--hover-bg); }
 .preview-stage.public .preview-content { max-width: 980px; }
 
 .markdown-body { color: var(--text); line-height: 1.6; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; }
@@ -663,6 +700,14 @@ input:focus, textarea:focus { border-color: var(--muted); }
   flex-direction: column;
   gap: 0.2rem;
 }
+.files-root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.2rem 0.1rem 0.45rem;
+  margin-bottom: 0.25rem;
+  min-height: 1rem;
+}
 .files-empty {
   padding: 1rem 0.75rem;
   color: var(--muted);
@@ -725,7 +770,8 @@ input:focus, textarea:focus { border-color: var(--muted); }
   text-transform: uppercase;
 }
 .folder-header:hover { background: var(--bg-3, var(--line)); color: var(--text); }
-.folder-header--dropover {
+.folder-header--dropover,
+.files-root.folder-header--dropover {
   background: var(--accent, var(--text));
   color: var(--bg-1, #000);
   outline: 1px dashed var(--accent, var(--text));
