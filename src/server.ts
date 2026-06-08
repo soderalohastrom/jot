@@ -43,6 +43,7 @@ import {
   type RevisionMeta,
   type RecordOpts,
 } from "./revisions.js";
+import { computeConnections } from "./connections.js";
 
 
 type CommentAnchor = {
@@ -761,6 +762,28 @@ app.get("/api/notes/:id", requireOwnerApi, (req, res) => {
   }
 
   res.json({ ok: true, ...serializeNoteForClient(note, req) });
+});
+
+app.get("/api/notes/:id/connections", requireOwnerApi, (req, res) => {
+  const note = notes.get(String(req.params.id));
+  if (!note) {
+    res.status(404).json({ ok: false, error: "Note not found." });
+    return;
+  }
+  const limit = req.query.limit ? Math.max(1, Math.min(50, Number(req.query.limit) || 12)) : 12;
+  const connections = computeConnections(
+    note.id,
+    Array.from(notes.values()).map((n) => ({
+      id: n.id,
+      title: n.title,
+      project: n.project || "",
+      markdown: n.markdown,
+      updatedAt: n.updatedAt,
+      shareId: n.shareId,
+    })),
+    { limit },
+  );
+  res.json({ ok: true, connections });
 });
 
 app.put("/api/notes/:id", requireOwnerApi, (req, res) => {
@@ -2047,16 +2070,26 @@ function persistNote(note: NoteRecord, optsOrLegacy: PersistOpts | boolean = tru
 
 function searchNotes(query: string) {
   const needle = query.trim().toLowerCase();
-  return Array.from(notes.values())
-    .map((note) => summarizeNote(note, needle))
-    .filter((note) => {
-      if (!needle) {
-        return true;
+  const tokens = tokenizeSearchQuery(needle);
+  const ranked = Array.from(notes.values())
+    .map((note) => {
+      const summary = summarizeNote(note, needle);
+      if (!tokens.length) {
+        return { summary, score: 0 };
       }
 
-      return note.title.toLowerCase().includes(needle) || note.snippet.toLowerCase().includes(needle);
+      const score = fuzzySearchScore(buildSearchHaystack(note), tokens);
+      if (score === null) {
+        return null;
+      }
+
+      return { summary, score };
     })
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .filter((item): item is { summary: NoteSummary; score: number } => Boolean(item));
+
+  return ranked
+    .sort((a, b) => a.score - b.score || b.summary.updatedAt.localeCompare(a.summary.updatedAt))
+    .map((item) => item.summary);
 }
 
 function summarizeNote(note: NoteRecord, needle: string): NoteSummary {
@@ -2070,6 +2103,65 @@ function summarizeNote(note: NoteRecord, needle: string): NoteSummary {
   };
 }
 
+function buildSearchHaystack(note: NoteRecord) {
+  return `${note.title} ${note.project || ""} ${note.markdown}`.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function tokenizeSearchQuery(query: string) {
+  return query
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function fuzzySearchScore(haystack: string, tokens: string[]) {
+  let score = 0;
+  for (const token of tokens) {
+    const tokenScore = fuzzyTokenScore(haystack, token);
+    if (tokenScore === null) {
+      return null;
+    }
+    score += tokenScore;
+  }
+  return score;
+}
+
+function fuzzyTokenScore(haystack: string, needle: string) {
+  if (!needle) {
+    return 0;
+  }
+
+  const exactIndex = haystack.indexOf(needle);
+  if (exactIndex !== -1) {
+    return exactIndex;
+  }
+
+  if (needle.length < 2) {
+    return null;
+  }
+
+  let cursor = -1;
+  let gapPenalty = 0;
+  let firstIndex = -1;
+  for (const char of needle) {
+    const nextIndex = haystack.indexOf(char, cursor + 1);
+    if (nextIndex === -1) {
+      return null;
+    }
+    if (firstIndex === -1) {
+      firstIndex = nextIndex;
+    }
+    if (cursor !== -1) {
+      gapPenalty += nextIndex - cursor - 1;
+    }
+    cursor = nextIndex;
+  }
+
+  return 1000 + firstIndex + gapPenalty * 10;
+}
+
 function buildSnippet(note: NoteRecord, needle: string) {
   const source = note.markdown.replace(/\s+/g, " ").trim();
   if (!source) {
@@ -2080,14 +2172,19 @@ function buildSnippet(note: NoteRecord, needle: string) {
     return source.slice(0, 140);
   }
 
-  const index = source.toLowerCase().indexOf(needle);
-  if (index === -1) {
-    return source.slice(0, 140);
-  }
+  const tokens = tokenizeSearchQuery(needle);
+  const candidates = [needle, ...tokens];
+  for (const candidate of candidates) {
+    const index = source.toLowerCase().indexOf(candidate);
+    if (index === -1) {
+      continue;
+    }
 
-  const start = Math.max(0, index - 40);
-  const end = Math.min(source.length, index + needle.length + 80);
-  return source.slice(start, end);
+    const start = Math.max(0, index - 40);
+    const end = Math.min(source.length, index + candidate.length + 80);
+    return source.slice(start, end);
+  }
+  return source.slice(0, 140);
 }
 
 function findNoteByShareId(shareId: string) {
