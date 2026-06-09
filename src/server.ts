@@ -44,6 +44,7 @@ import {
   type RecordOpts,
 } from "./revisions.js";
 import { computeConnections } from "./connections.js";
+import { initEmbeddings, semanticNeighbors } from "./embeddings.js";
 
 
 type CommentAnchor = {
@@ -199,6 +200,7 @@ marked.setOptions({
 
 ensureDirectories();
 initRevisions(dataDir);
+initEmbeddings(dataDir);
 loadNotesIntoMemory();
 seedImportRevisions();
 
@@ -626,9 +628,10 @@ app.delete("/api/notes/:id", requireOwnerApi, (req, res) => {
 
 app.get("/api/notes", requireOwnerApi, (req, res) => {
   const query = String(req.query.q || "");
+  const mode = req.query.mode === "exact" ? "exact" : "fuzzy";
   const hasProjectFilter = Object.prototype.hasOwnProperty.call(req.query, "project");
   const projectFilter = hasProjectFilter ? normalizeProject(req.query.project) : null;
-  let results = searchNotes(query);
+  let results = searchNotes(query, mode);
   // ?project= (empty) → unfiled bucket; ?project=mise → that folder; absent → all.
   if (projectFilter !== null) {
     results = results.filter((n) => (n.project || "") === projectFilter);
@@ -764,25 +767,33 @@ app.get("/api/notes/:id", requireOwnerApi, (req, res) => {
   res.json({ ok: true, ...serializeNoteForClient(note, req) });
 });
 
-app.get("/api/notes/:id/connections", requireOwnerApi, (req, res) => {
+app.get("/api/notes/:id/connections", requireOwnerApi, async (req, res) => {
   const note = notes.get(String(req.params.id));
   if (!note) {
     res.status(404).json({ ok: false, error: "Note not found." });
     return;
   }
   const limit = req.query.limit ? Math.max(1, Math.min(50, Number(req.query.limit) || 12)) : 12;
-  const connections = computeConnections(
-    note.id,
-    Array.from(notes.values()).map((n) => ({
-      id: n.id,
-      title: n.title,
-      project: n.project || "",
-      markdown: n.markdown,
-      updatedAt: n.updatedAt,
-      shareId: n.shareId,
-    })),
-    { limit },
-  );
+  const noteList = Array.from(notes.values()).map((n) => ({
+    id: n.id,
+    title: n.title,
+    project: n.project || "",
+    markdown: n.markdown,
+    updatedAt: n.updatedAt,
+    shareId: n.shareId,
+  }));
+  // Semantic edges via local Ollama embeddings; degrade to deterministic-only
+  // if Ollama is unavailable or ?semantic=0 is passed.
+  let semantic: Map<string, number> | undefined;
+  if (req.query.semantic !== "0") {
+    try {
+      const neighbors = await semanticNeighbors(note.id, noteList, { limit: 30 });
+      semantic = new Map(neighbors.map((s) => [s.id, s.score]));
+    } catch {
+      semantic = undefined;
+    }
+  }
+  const connections = computeConnections(note.id, noteList, { limit, semantic });
   res.json({ ok: true, connections });
 });
 
@@ -2068,8 +2079,35 @@ function persistNote(note: NoteRecord, optsOrLegacy: PersistOpts | boolean = tru
   }
 }
 
-function searchNotes(query: string) {
-  const needle = query.trim().toLowerCase();
+type SearchMode = "fuzzy" | "exact";
+
+function searchNotes(query: string, mode: SearchMode = "fuzzy") {
+  const needle = query.trim();
+  const normalizedNeedle = normalizeSearchText(needle);
+
+  if (mode === "exact") {
+    const ranked = Array.from(notes.values())
+      .map((note) => {
+        const summary = summarizeNote(note, needle);
+        if (!normalizedNeedle) {
+          return { summary, score: 0 };
+        }
+
+        const haystack = normalizeSearchText(`${note.title} ${note.project || ""} ${note.markdown}`);
+        const index = haystack.indexOf(normalizedNeedle);
+        if (index === -1) {
+          return null;
+        }
+
+        return { summary, score: index };
+      })
+      .filter((item): item is { summary: NoteSummary; score: number } => Boolean(item));
+
+    return ranked
+      .sort((a, b) => a.score - b.score || b.summary.updatedAt.localeCompare(a.summary.updatedAt))
+      .map((item) => item.summary);
+  }
+
   const tokens = tokenizeSearchQuery(needle);
   const ranked = Array.from(notes.values())
     .map((note) => {
@@ -2104,16 +2142,22 @@ function summarizeNote(note: NoteRecord, needle: string): NoteSummary {
 }
 
 function buildSearchHaystack(note: NoteRecord) {
-  return `${note.title} ${note.project || ""} ${note.markdown}`.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return normalizeSearchText(`${note.title} ${note.project || ""} ${note.markdown}`).replace(/\s+/g, "");
 }
 
 function tokenizeSearchQuery(query: string) {
-  return query
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .split(/\s+/)
+  return normalizeSearchText(query)
+    .split(" ")
     .map((token) => token.trim())
     .filter(Boolean);
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function fuzzySearchScore(haystack: string, tokens: string[]) {
