@@ -374,12 +374,14 @@ switch (subCommand) {
   }
 
   case "search": {
-    const query = args.slice(2).join(" ");
+    const modeArg = args.find((a) => a.startsWith("--mode="));
+    const mode = modeArg ? modeArg.split("=").slice(1).join("=") : "fuzzy";
+    const query = args.slice(2).filter((a) => !a.startsWith("--mode=")).join(" ");
     if (!query) {
-      console.error("Usage: jot <instance> search <query>");
+      console.error("Usage: jot <instance> search <query> [--mode=exact|fuzzy]");
       process.exit(1);
     }
-    const payload = await request(instance, "GET", `/api/notes?q=${encodeURIComponent(query)}`);
+    const payload = await request(instance, "GET", `/api/notes?q=${encodeURIComponent(query)}&mode=${encodeURIComponent(mode)}`);
     for (const note of payload.notes) {
       console.log(`${note.id}\t${note.title}\t${note.updatedAt}`);
     }
@@ -781,7 +783,7 @@ Instance management:
 Owner commands:
   jot <instance> list                     List all notes (cols: id, [project], title, updated)
   jot <instance> list --project=mise      List only jots in a folder (--project= → unfiled)
-  jot <instance> search <query>           Search notes
+  jot <instance> search <query> [--mode=exact|fuzzy]  Search notes
 
 Projects (flat folders):
   jot <instance> projects                 List folders with jot counts

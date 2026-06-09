@@ -211,6 +211,41 @@ input:focus, textarea:focus { border-color: var(--muted); }
 
 .list-page { max-width: 980px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
 .list-search-wrap { display: grid; gap: 0.35rem; margin-bottom: 0.5rem; }
+.search-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+.search-toolbar input { min-width: 0; }
+.search-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.search-mode-button,
+.search-clear-button {
+  border: 1px solid var(--line);
+  background: var(--bg-1, transparent);
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.search-mode-button {
+  padding: 0.5rem 0.95rem;
+  border-radius: 999px;
+}
+.search-mode-button.is-active {
+  background: var(--bg-3, var(--line));
+  border-color: var(--accent, var(--text));
+  color: var(--text);
+}
+.search-clear-button {
+  padding: 0.5rem 0.8rem;
+  border-radius: 8px;
+}
 .list-search { padding: 0.85rem 1rem; background: var(--input-bg); }
 .note-list { }
 
@@ -681,6 +716,7 @@ input:focus, textarea:focus { border-color: var(--muted); }
 }
 .files-panel-title { font-weight: 600; letter-spacing: 0.02em; }
 .files-panel-search { padding: 0.5rem; border-bottom: 1px solid var(--line); }
+.files-panel-search .search-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
 .files-panel-search input {
   width: 100%;
   padding: 0.4rem 0.6rem;
@@ -690,6 +726,10 @@ input:focus, textarea:focus { border-color: var(--muted); }
   color: var(--text);
   font: inherit;
   font-size: 0.85rem;
+}
+.files-panel-search .search-mode-button,
+.files-panel-search .search-clear-button {
+  font-size: 0.8rem;
 }
 .files-panel-search input:focus { outline: none; border-color: var(--accent, var(--text)); }
 .files-panel-body {

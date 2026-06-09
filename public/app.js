@@ -13,6 +13,7 @@
     (navigator.userAgent.includes("Mac") && "ontouchstart" in window && navigator.maxTouchPoints > 1);
 
   const themeIcon = window.__themeIcon || ((t) => t === "dark" ? "☀" : "☾");
+  const SEARCH_MODE_KEY = "jot.search.mode";
 
   let mermaidIdCounter = 0;
   let mermaidCache = [];
@@ -112,6 +113,28 @@
     modalOpen: false,
   };
 
+  function getSearchMode() {
+    return localStorage.getItem(SEARCH_MODE_KEY) === "exact" ? "exact" : "fuzzy";
+  }
+
+  function setSearchMode(mode) {
+    localStorage.setItem(SEARCH_MODE_KEY, mode === "exact" ? "exact" : "fuzzy");
+  }
+
+  function syncSearchModeButtons() {
+    const exact = getSearchMode() === "exact";
+    document.querySelectorAll("[data-search-mode-toggle]").forEach((button) => {
+      button.classList.toggle("is-active", exact);
+      button.setAttribute("aria-pressed", exact ? "true" : "false");
+      button.title = exact ? "Exact match search is on" : "Exact match search is off";
+    });
+  }
+
+  function toggleSearchMode() {
+    setSearchMode(getSearchMode() === "exact" ? "fuzzy" : "exact");
+    syncSearchModeButtons();
+  }
+
   if (page === "list") {
     initListPage();
     return;
@@ -143,7 +166,13 @@
         </header>
         <main class="list-page">
           <div class="list-search-wrap">
-            <input class="list-search" id="searchInput" type="text" placeholder="Search notes" autocomplete="off" />
+            <div class="search-toolbar">
+              <input class="list-search" id="searchInput" type="text" placeholder="Search notes" autocomplete="off" />
+              <div class="search-toolbar-actions">
+                <button type="button" class="search-mode-button" id="searchModeButton" data-search-mode-toggle aria-pressed="false">exact match</button>
+                <button type="button" class="search-clear-button" id="searchClearButton">Clear</button>
+              </div>
+            </div>
           </div>
           <div class="note-list" id="noteList"></div>
         </main>
@@ -152,6 +181,8 @@
     `;
 
     const searchInput = document.getElementById("searchInput");
+    const searchModeButton = document.getElementById("searchModeButton");
+    const searchClearButton = document.getElementById("searchClearButton");
     const noteList = document.getElementById("noteList");
     const newNoteButton = document.getElementById("newNoteButton");
     const settingsButton = document.getElementById("settingsButton");
@@ -184,6 +215,24 @@
 
     logoutButton.addEventListener("click", logoutOwner);
     settingsButton.addEventListener("click", () => openSettingsModal());
+
+    syncSearchModeButtons();
+
+    if (searchModeButton) {
+      searchModeButton.addEventListener("click", () => {
+        toggleSearchMode();
+        loadNotes(searchInput.value);
+      });
+    }
+
+    if (searchClearButton) {
+      searchClearButton.addEventListener("click", () => {
+        searchInput.value = "";
+        clearTimeout(state.searchTimer);
+        loadNotes("");
+        searchInput.focus();
+      });
+    }
 
     searchInput.addEventListener("input", () => {
       clearTimeout(state.searchTimer);
@@ -323,8 +372,8 @@
       `;
     }
 
-    async function loadNotes(query) {
-      const response = await api(`/api/notes?q=${encodeURIComponent(query)}`);
+    async function loadNotes(query, mode = getSearchMode()) {
+      const response = await api(`/api/notes?q=${encodeURIComponent(query)}&mode=${encodeURIComponent(mode)}`);
       const hasNotes = response.notes.length > 0;
       const hasQuery = query.trim().length > 0;
 
@@ -642,6 +691,9 @@ if (resolvedButton) {
     const filesPanel = document.getElementById("filesPanel");
     const filesList = document.getElementById("filesList");
     const filesSearchInput = document.getElementById("filesSearchInput");
+    const filesSearchModeButton = document.getElementById("filesSearchModeButton");
+    const filesSearchClearButton = document.getElementById("filesSearchClearButton");
+    const newNoteFromFilesButton = document.getElementById("newNoteFromFilesButton");
     const filesPanelButton = document.getElementById("filesPanelButton");
     const filesCloseButton = document.getElementById("filesCloseButton");
 
@@ -809,7 +861,7 @@ if (resolvedButton) {
       async function fetchList(query = "") {
         lastQuery = query;
         if (inflight) return inflight;
-        inflight = api(`/api/notes?q=${encodeURIComponent(query)}`).then((payload) => {
+        inflight = api(`/api/notes?q=${encodeURIComponent(query)}&mode=${encodeURIComponent(getSearchMode())}`).then((payload) => {
           notesCache = Array.isArray(payload?.notes) ? payload.notes : [];
           loaded = true;
           renderList();
@@ -919,6 +971,27 @@ if (resolvedButton) {
           searchTimer = setTimeout(() => fetchList(filesSearchInput.value), 160);
         });
       }
+      if (newNoteFromFilesButton) {
+        newNoteFromFilesButton.addEventListener("click", async () => {
+          const payload = await api("/api/notes", { method: "POST" });
+          prepareFreshNoteOpen();
+          window.location.href = `/notes/${payload.note.id}`;
+        });
+      }
+      if (filesSearchModeButton) {
+        filesSearchModeButton.addEventListener("click", () => {
+          toggleSearchMode();
+          fetchList(filesSearchInput ? filesSearchInput.value : lastQuery);
+        });
+      }
+      if (filesSearchClearButton && filesSearchInput) {
+        filesSearchClearButton.addEventListener("click", () => {
+          filesSearchInput.value = "";
+          clearTimeout(searchTimer);
+          fetchList("");
+          filesSearchInput.focus();
+        });
+      }
       if (filesCloseButton) {
         filesCloseButton.addEventListener("click", () => {
           localStorage.setItem("jot.filesPanel", "0");
@@ -957,6 +1030,7 @@ if (resolvedButton) {
       const initiallyOpen = localStorage.getItem("jot.filesPanel") === "1";
       applyOpen(initiallyOpen);
       if (initiallyOpen) fetchList("");
+      syncSearchModeButtons();
 
       return {
         // Forwarded from handleCrossNoteEvent so the list stays live across
@@ -1616,8 +1690,8 @@ if (resolvedButton) {
       <div class="app-root">
         <header class="topbar">
           <div class="topbar-left">
-            <jot-icon-button icon="sidebar" label="Files panel" id="filesPanelButton"></jot-icon-button>
             <jot-icon-button icon="home" label="Back to notes" id="notesButton"></jot-icon-button>
+            <jot-icon-button icon="sidebar" label="Files panel" id="filesPanelButton"></jot-icon-button>
             <input id="titleInput" class="title-input" type="text" spellcheck="false" value="untitled" />
             <div class="project-chip-wrap" id="projectChipWrap">
               <button type="button" class="project-chip" id="projectChip" title="Project folder — click to file this jot">
@@ -1660,12 +1734,19 @@ if (resolvedButton) {
             <header class="files-panel-header">
               <span class="files-panel-title">Notes</span>
               <span class="files-panel-header-actions">
+                <jot-icon-button icon="document" label="New note" id="newNoteFromFilesButton"></jot-icon-button>
                 <jot-icon-button icon="folderPlus" label="New folder" id="newFolderButton"></jot-icon-button>
                 <jot-icon-button icon="close" label="Close files" id="filesCloseButton"></jot-icon-button>
               </span>
             </header>
             <div class="files-panel-search">
-              <input id="filesSearchInput" type="search" placeholder="Search notes..." spellcheck="false" />
+              <div class="search-toolbar search-toolbar--compact">
+                <input id="filesSearchInput" type="search" placeholder="Search notes..." spellcheck="false" />
+                <div class="search-toolbar-actions">
+                  <button type="button" class="search-mode-button" id="filesSearchModeButton" data-search-mode-toggle aria-pressed="false">exact match</button>
+                  <button type="button" class="search-clear-button" id="filesSearchClearButton">Clear</button>
+                </div>
+              </div>
             </div>
             <div class="files-panel-body" id="filesList"></div>
           </aside>
