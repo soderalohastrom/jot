@@ -7,7 +7,7 @@
 // (no index to invalidate). Phase 2 (chunk embeddings) and Phase 3 (LLM
 // temporal graph) layer on top of this; both stay optional and provenance-backed.
 
-export type ConnectionEdgeType = "link" | "project" | "mention" | "term";
+export type ConnectionEdgeType = "link" | "project" | "mention" | "term" | "semantic";
 
 export type ConnectionEdge = {
   type: ConnectionEdgeType;
@@ -82,7 +82,7 @@ function mentionsTitle(body: string, title: string): boolean {
 export function computeConnections(
   targetId: string,
   allNotes: Iterable<ConnNote>,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; semantic?: Map<string, number> } = {},
 ): Connection[] {
   const limit = opts.limit ?? 12;
   const list = Array.from(allNotes);
@@ -153,6 +153,13 @@ export function computeConnections(
         const sample = shared.sort((a, b) => idf(b) - idf(a)).slice(0, 5);
         edges.push({ type: "term", weight, reason: `Shares terms: ${sample.join(", ")}` });
       }
+    }
+
+    // semantic similarity (Ollama embeddings, mean-centered cosine) — the caller
+    // precomputes the map; the async embed step lives outside this sync function.
+    const sem = opts.semantic?.get(other.id);
+    if (sem !== undefined) {
+      edges.push({ type: "semantic", weight: Math.min(0.7, sem * 3), reason: `Semantically similar (${sem.toFixed(2)})` });
     }
 
     if (edges.length === 0) continue;
