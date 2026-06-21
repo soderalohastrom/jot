@@ -609,6 +609,64 @@ switch (subCommand) {
     break;
   }
 
+  case "publish": {
+    // Copy a note from this (source) instance to another registered (dest) instance
+    // and set its public share. Fills the cross-instance gap — e.g. localhost -> VPS.
+    const noteId = args[2];
+    const toArg = args.find((a) => a.startsWith("--to="));
+    const accessArg = args.find((a) => a.startsWith("--access="));
+    const updateArg = args.find((a) => a.startsWith("--update="));
+    if (!noteId || !toArg) {
+      console.error("Usage: jot <srcInstance> publish <id> --to=<destInstance> [--access=view] [--update=<destId>]");
+      console.error("Example: jot local publish ar7svgia --to=vps --access=view");
+      process.exit(1);
+    }
+    const destName = toArg.split("=").slice(1).join("=");
+    if (!destName) {
+      console.error("--to requires a destination instance name");
+      process.exit(1);
+    }
+    if (destName === instanceName) {
+      console.error("Source and destination instances must differ.");
+      process.exit(1);
+    }
+    const dest = getInstance(destName);
+    const access = accessArg ? accessArg.split("=").slice(1).join("=") : "view";
+    if (!["none", "view", "comment", "edit"].includes(access)) {
+      console.error("--access must be one of: none, view, comment, edit");
+      process.exit(1);
+    }
+
+    // 1. read source note (title + body)
+    const srcPayload = await request(instance, "GET", `/api/notes/${noteId}`);
+    const src = srcPayload.note;
+    const title = src.title || "untitled";
+    const markdown = src.markdown || "";
+
+    // 2. create on dest, or reuse an existing dest note via --update=<destId>
+    let destId = updateArg ? updateArg.split("=").slice(1).join("=") : null;
+    if (destId) {
+      await request(dest, "GET", `/api/notes/${destId}`); // verify it exists (errors out if not)
+    } else {
+      const created = await request(dest, "POST", "/api/notes");
+      destId = created.note.id;
+    }
+
+    // 3. copy title + body, then set share access (mirrors update/share verbs)
+    await request(dest, "PUT", `/api/notes/${destId}`, { title, markdown });
+    await request(dest, "PUT", `/api/notes/${destId}`, { shareAccess: access });
+
+    // 4. fetch the public URL (server builds it from the dest host)
+    const finalPayload = await request(dest, "GET", `/api/notes/${destId}`);
+    const note = finalPayload.note;
+    console.log(`Published ${noteId} (${instanceName}) -> ${destName}`);
+    console.log(`  dest id:    ${destId}`);
+    console.log(`  access:     ${note.shareAccess}`);
+    console.log(`  public:     ${note.shareUrl}`);
+    console.log(`  re-publish: jot ${instanceName} publish ${noteId} --to=${destName} --update=${destId}`);
+    break;
+  }
+
   case "update": {
     const noteId = args[2];
     const field = args[3];
