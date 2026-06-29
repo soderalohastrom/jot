@@ -338,6 +338,15 @@ app.delete("/api/keys/:id", requireOwnerApi, (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/keys/:id/regenerate", requireOwnerApi, (req, res) => {
+  const result = regenerateApiKey(String(req.params.id));
+  if (!result) {
+    res.status(404).json({ ok: false, error: "API key not found." });
+    return;
+  }
+  res.json({ ok: true, ...result });
+});
+
 app.post("/api/notes/:id/edit", requireOwnerApi, (req, res) => {
   const note = notes.get(String(req.params.id));
   if (!note) {
@@ -2500,8 +2509,36 @@ function secureEqualsHex(a: string, b: string) {
   return crypto.timingSafeEqual(left, right);
 }
 
+// Stable cache for the JOT_API_KEY env var so we don't re-add it on every loadAuthData call.
+// Key = raw env key value, Value = { salt, hash } — computed once per server lifetime.
+const _envApiKeyCache = new Map<string, { salt: string; hash: string }>();
+
 function loadAuthData() {
-  return readJson<AuthData | null>(authFilePath, null);
+  const auth = readJson<AuthData | null>(authFilePath, null);
+  // JOT_API_KEY env var provides a stable API key loaded from the system environment.
+  // This lets the service persist a key across restarts — the key lives in
+  // /etc/jot/jot.env (loaded by systemd), not in auth.json.
+  const envKey = process.env.JOT_API_KEY;
+  if (auth && envKey) {
+    if (!auth.apiKeys) auth.apiKeys = [];
+    let cached = _envApiKeyCache.get(envKey);
+    if (!cached) {
+      const salt = crypto.randomBytes(16).toString("hex");
+      cached = { salt, hash: hashSecret(envKey, salt) };
+      _envApiKeyCache.set(envKey, cached);
+    }
+    // Only add if not already present (check by id='env' label marker).
+    if (!auth.apiKeys.some((k) => k.id === "env" && k.keyHash === cached.hash)) {
+      auth.apiKeys.push({
+        id: "env",
+        label: "env:JOT_API_KEY",
+        keySalt: cached.salt,
+        keyHash: cached.hash,
+        createdAt: nowIso(),
+      });
+    }
+  }
+  return auth;
 }
 
 function saveAuthData(authData: AuthData) {
@@ -2760,6 +2797,25 @@ function deleteApiKey(keyId: string) {
   }
 
   return false;
+}
+
+function regenerateApiKey(keyId: string) {
+  const auth = loadAuthData();
+  if (!auth || !auth.apiKeys) {
+    return null;
+  }
+
+  const idx = auth.apiKeys.findIndex((k) => k.id === keyId);
+  if (idx === -1) {
+    return null;
+  }
+
+  const rawKey = crypto.randomBytes(32).toString("base64url");
+  const salt = crypto.randomBytes(16).toString("hex");
+  auth.apiKeys[idx].keySalt = salt;
+  auth.apiKeys[idx].keyHash = hashSecret(rawKey, salt);
+  saveAuthData(auth);
+  return { id: auth.apiKeys[idx].id, label: auth.apiKeys[idx].label, key: rawKey, createdAt: auth.apiKeys[idx].createdAt };
 }
 
 function listApiKeys() {

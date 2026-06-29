@@ -314,15 +314,17 @@ input:focus, textarea:focus { border-color: var(--muted); }
 .agent-modal jot-button { flex-shrink: 0; }
 .settings-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
 .settings-section-title { margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--muted); }
-.api-key-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.5rem; border-radius: 8px; gap: 0.75rem; }
+.api-key-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.5rem; border-radius: 8px; gap: 0.75rem; flex-wrap: wrap; row-gap: 0.35rem; }
 .api-key-row:hover { background: var(--hover-bg); }
-.api-key-info { display: flex; align-items: center; gap: 0.75rem; }
+.api-key-info { display: flex; align-items: center; gap: 0.75rem; flex: 1; min-width: 0; }
 .api-key-label { font-weight: 600; }
 .api-key-meta { color: var(--muted-2); font-size: 0.85rem; }
+.api-key-row[data-key-id="env"] .api-key-label::after { content: " (env)"; font-weight: 400; color: var(--muted-2); font-size: 0.8em; }
 .api-keys-empty { color: var(--muted-2); font-size: 0.9rem; }
-.api-key-secret { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
+.api-key-actions { display: flex; align-items: center; gap: 0.25rem; flex-shrink: 0; }
+.api-key-secret { display: flex; align-items: center; gap: 0.35rem; width: 100%; padding-left: 0.25rem; box-sizing: border-box; }
 .api-key-secret code { font-size: 0.82rem; color: var(--muted); word-break: break-all; }
-.icon-action.copy-success { color: var(--green); }
+jot-icon-button.copy-success { color: var(--green); }
 
 .workspace {
   display: grid; grid-template-columns: 1fr 1fr;

@@ -322,6 +322,23 @@
           } catch {}
           return;
         }
+
+        const revealBtn = event.target.closest("[data-reveal-key]") || event.target.closest("jot-icon-button[data-reveal-key]");
+        if (revealBtn) {
+          revealKey(revealBtn.dataset.revealKey);
+          return;
+        }
+
+        const regenerateBtn = event.target.closest("[data-regenerate-key]") || event.target.closest("jot-icon-button[data-regenerate-key]");
+        if (regenerateBtn) {
+          const keyId = regenerateBtn.dataset.regenerateKey;
+          if (!confirm(`Regenerate this API key? The old key will stop working immediately.`)) return;
+          const result = await api(`/api/keys/${keyId}/regenerate`, { method: "POST" });
+          await renderKeys();
+          showNewKey(result.id, result.key);
+          return;
+        }
+
         const deleteBtn = event.target.closest("[data-delete-key]") || event.target.closest("jot-icon-button[data-delete-key]");
         if (!deleteBtn) return;
         if (!confirm("Delete this API key?")) return;
@@ -338,7 +355,13 @@
                   <span class="api-key-label">${escapeHtml(key.label)}</span>
                   <span class="api-key-meta">${escapeHtml(formatDate(key.createdAt))}</span>
                 </div>
-                <jot-icon-button icon="trash" label="Delete key" data-delete-key="${escapeHtml(key.id)}" size="sm" danger></jot-icon-button>
+                <div class="api-key-actions">
+                  ${key.id === "env"
+                    ? `<jot-icon-button icon="eye" label="Reveal key" data-reveal-key="${escapeHtml(key.id)}" size="sm"></jot-icon-button>`
+                    : `<jot-icon-button icon="refresh" label="Regenerate key" data-regenerate-key="${escapeHtml(key.id)}" size="sm"></jot-icon-button>`
+                  }
+                  <jot-icon-button icon="trash" label="Delete key" data-delete-key="${escapeHtml(key.id)}" size="sm" danger></jot-icon-button>
+                </div>
               </div>
             `).join("")
           : '<div class="api-keys-empty">No API keys yet.</div>';
@@ -352,8 +375,23 @@
         const secret = document.createElement("div");
         secret.className = "api-key-secret";
         secret.innerHTML = `<code>${escapeHtml(key)}</code><jot-icon-button icon="copy" label="Copy key" data-copy-key="${escapeHtml(key)}" size="sm"></jot-icon-button>`;
-        const deleteBtn = row.querySelector(".icon-action[data-delete-key]");
-        row.insertBefore(secret, deleteBtn);
+        row.querySelector(".api-key-actions").insertAdjacentElement("beforebegin", secret);
+      }
+
+      // For env-backed keys, the raw value is never returned by the server.
+      // Show a placeholder prompting the user to use the regenerate flow instead.
+      function revealKey(keyId) {
+        if (keyId !== "env") return;
+        const row = apiKeysList.querySelector(`[data-key-id="env"]`);
+        if (!row) return;
+        const existing = row.querySelector(".api-key-secret");
+        if (existing) { existing.remove(); return; }
+        const note = document.createElement("div");
+        note.className = "api-key-secret";
+        note.style.fontSize = "0.8em";
+        note.style.color = "var(--muted)";
+        note.innerHTML = `<em>Regenerate to set a new key. The old key remains active until you do.</em>`;
+        row.querySelector(".api-key-actions").insertAdjacentElement("beforebegin", note);
       }
 
       renderKeys();
