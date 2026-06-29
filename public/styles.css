@@ -325,6 +325,7 @@ input:focus, textarea:focus { border-color: var(--muted); }
 .api-key-secret { display: flex; align-items: center; gap: 0.35rem; width: 100%; padding-left: 0.25rem; box-sizing: border-box; }
 .api-key-secret code { font-size: 0.82rem; color: var(--muted); word-break: break-all; }
 jot-icon-button.copy-success { color: var(--green); }
+.settings-hint { font-size: 0.82em; color: var(--muted-2); margin: 0 0 0.5rem 0; line-height: 1.4; }
 
 .workspace {
   display: grid; grid-template-columns: 1fr 1fr;

@@ -19,6 +19,8 @@
 
     const formData = new FormData(form);
     const body = Object.fromEntries(formData.entries());
+    // Auto-label sessions with browser/platform info so they're readable in Settings → Owner Sessions.
+    body.label = [navigator.platform || "Unknown", navigator.userAgent.includes("Chrome") ? "Chrome" : navigator.userAgent.includes("Firefox") ? "Firefox" : "Browser"].join(" / ");
     const endpoint = mode === "setup" ? "/api/auth/setup" : "/api/auth/login";
 
     try {

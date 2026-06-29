@@ -282,6 +282,13 @@
             </div>
             <div id="apiKeysList"></div>
           </div>
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <h3 class="settings-section-title">Owner Sessions</h3>
+            </div>
+            <p class="settings-hint">Active browser/app sessions authenticated with your password. Revoke any you don't recognise.</p>
+            <div id="ownerTokensList"></div>
+          </div>
         </div>
       `;
 
@@ -395,6 +402,35 @@
       }
 
       renderKeys();
+
+      // --- Owner Sessions ---
+      const ownerTokensList = document.getElementById("ownerTokensList");
+
+      ownerTokensList.addEventListener("click", async (event) => {
+        const revokeBtn = event.target.closest("[data-revoke-token]") || event.target.closest("jot-icon-button[data-revoke-token]");
+        if (!revokeBtn) return;
+        const tokenId = revokeBtn.dataset.revokeToken;
+        if (!confirm("Revoke this session? Any browser or app using it will be signed out.")) return;
+        await api(`/api/auth/tokens/${tokenId}`, { method: "DELETE" });
+        renderTokens();
+      });
+
+      async function renderTokens() {
+        const response = await api("/api/auth/tokens");
+        ownerTokensList.innerHTML = response.tokens.length
+          ? response.tokens.map((t) => `
+              <div class="api-key-row" data-token-id="${escapeHtml(t.id)}">
+                <div class="api-key-info">
+                  <span class="api-key-label">${escapeHtml(t.label)}</span>
+                  <span class="api-key-meta">${escapeHtml(formatDate(t.createdAt))} · last used ${escapeHtml(formatDate(t.lastUsedAt))}</span>
+                </div>
+                <jot-icon-button icon="trash" label="Revoke session" data-revoke-token="${escapeHtml(t.id)}" size="sm" danger></jot-icon-button>
+              </div>
+            `).join("")
+          : '<div class="api-keys-empty">No active sessions.</div>';
+      }
+
+      renderTokens();
     }
 
     function renderNoteRowHtml(note) {

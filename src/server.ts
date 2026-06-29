@@ -136,6 +136,7 @@ type DeviceToken = {
   hash: string;
   createdAt: string;
   lastUsedAt: string;
+  label?: string;
 };
 
 type ApiKey = {
@@ -293,7 +294,8 @@ app.post("/api/auth/login", (req, res) => {
     return;
   }
 
-  const token = issueOwnerToken();
+  const label = String(req.body.label || "").trim() || undefined;
+  const token = issueOwnerToken(label);
   res.json({ ok: true, token, ownerLocalStorageTokenKey });
 });
 
@@ -333,6 +335,19 @@ app.delete("/api/keys/:id", requireOwnerApi, (req, res) => {
   const deleted = deleteApiKey(String(req.params.id));
   if (!deleted) {
     res.status(404).json({ ok: false, error: "API key not found." });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/tokens", requireOwnerApi, (_req, res) => {
+  res.json({ ok: true, tokens: listOwnerTokens() });
+});
+
+app.delete("/api/auth/tokens/:id", requireOwnerApi, (req, res) => {
+  const revoked = revokeOwnerTokenById(String(req.params.id));
+  if (!revoked) {
+    res.status(404).json({ ok: false, error: "Token not found." });
     return;
   }
   res.json({ ok: true });
@@ -2570,7 +2585,7 @@ function initializeOwnerAuth(password: string) {
   return issueOwnerToken();
 }
 
-function issueOwnerToken() {
+function issueOwnerToken(label?: string) {
   const auth = loadAuthData();
   if (!auth) {
     throw new Error("Password not configured.");
@@ -2585,6 +2600,7 @@ function issueOwnerToken() {
     hash: hashSecret(token, salt),
     createdAt: timestamp,
     lastUsedAt: timestamp,
+    label: label || "Unnamed session",
   });
   saveAuthData(auth);
   return token;
@@ -2625,6 +2641,33 @@ function revokeOwnerToken(token: string) {
     auth.tokens = tokens;
     saveAuthData(auth);
   }
+}
+
+function listOwnerTokens() {
+  const auth = loadAuthData();
+  if (!auth) {
+    return [];
+  }
+  return auth.tokens.map((t) => ({
+    id: t.id,
+    label: t.label || "Unnamed session",
+    createdAt: t.createdAt,
+    lastUsedAt: t.lastUsedAt,
+  }));
+}
+
+function revokeOwnerTokenById(id: string) {
+  const auth = loadAuthData();
+  if (!auth) {
+    return false;
+  }
+  const before = auth.tokens.length;
+  auth.tokens = auth.tokens.filter((t) => t.id !== id);
+  if (auth.tokens.length !== before) {
+    saveAuthData(auth);
+    return true;
+  }
+  return false;
 }
 
 function parseCookies(header: string | undefined) {
