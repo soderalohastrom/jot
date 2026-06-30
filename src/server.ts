@@ -2461,7 +2461,14 @@ function renderMarkdown(markdown: string) {
 }
 
 function makeShareUrl(req: Request, shareId: string) {
-  return `${req.protocol}://${req.get("host")}/s/${shareId}`;
+  const host = req.get("host") || "";
+  // ponytail: public instances sit behind an HTTPS proxy (Cloudflare) that may
+  // reach the origin over http without a usable X-Forwarded-Proto. Honor XFP when
+  // present, keep http for localhost, but never emit http for a real domain.
+  const xfproto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
+  const proto = xfproto || (isLocal ? req.protocol : "https");
+  return `${proto}://${host}/s/${shareId}`;
 }
 
 type WebhookPayload = {
