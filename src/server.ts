@@ -2462,13 +2462,11 @@ function renderMarkdown(markdown: string) {
 
 function makeShareUrl(req: Request, shareId: string) {
   const host = req.get("host") || "";
-  // ponytail: public instances sit behind an HTTPS proxy (Cloudflare) that may
-  // reach the origin over http without a usable X-Forwarded-Proto. Honor XFP when
-  // present, keep http for localhost, but never emit http for a real domain.
-  const xfproto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  // ponytail: public instances are HTTPS-fronted (Cloudflare) but the origin sees
+  // http — and an intermediate proxy may even forward X-Forwarded-Proto: http — so
+  // don't trust the proxy scheme. Emit https for any real host; http only for localhost.
   const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
-  const proto = xfproto || (isLocal ? req.protocol : "https");
-  return `${proto}://${host}/s/${shareId}`;
+  return `${isLocal ? req.protocol : "https"}://${host}/s/${shareId}`;
 }
 
 type WebhookPayload = {
